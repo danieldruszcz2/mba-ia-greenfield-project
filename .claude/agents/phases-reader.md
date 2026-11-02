@@ -1,6 +1,6 @@
 ---
 name: phases-reader
-description: Reads prior-phase planning documents and extracts the Conventions to Match bullets AND the Inherited TD Details (verbatim from each prior phase's context.md `## Decisions Detail` section) AND the Inherited Deferred Capabilities (verbatim from each prior phase's context.md `## Non-UI / Deferred Capabilities` rows with `Status: deferred`) that downstream phases inherit. Returns a compact per-phase summary so the main thread does not load full phase docs (which can reach hundreds of lines each). Accepts mode=phase (all prior phases) or mode=task (only the latest completed phase); default mode=phase for backward-compat with callers that do not pass the param.
+description: 'Reads prior-phase planning documents and extracts the Conventions to Match bullets AND the Inherited TD Details (verbatim from each prior phase''s context.md `## Decisions Detail` section) AND the Inherited Deferred Capabilities (verbatim from each prior phase''s context.md `## Non-UI / Deferred Capabilities` rows with `Status: deferred`) that downstream phases inherit. Returns a compact per-phase summary so the main thread does not load full phase docs (which can reach hundreds of lines each). Accepts mode=phase (all prior phases) or mode=task (only the latest completed phase); default mode=phase for backward-compat with callers that do not pass the param.'
 tools: Read, Grep, Glob
 ---
 
