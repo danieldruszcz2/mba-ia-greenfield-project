@@ -31,38 +31,42 @@ sources_mtime:
 - Download do vídeo pelo usuário
 
 **Out of scope:** _Not specified._
+
 **Deliverables:** upload de até 10GB funcional, processamento automático do vídeo, streaming funcionando, URLs únicas geradas.
-**Affected subprojects:** _None named explicitly in the Phase 03 section of project-plan.md._
+
+**Affected subprojects:** _None named. The phase section does not mention any subproject path or include a "Subprojetos:" line._
+
 **Deferred subprojects:** _None._
-**Sequencing notes:** Depende de: Fase 01, Fase 02
+
+**Sequencing notes:** > Depende de: Fase 01, Fase 02
 
 **Neighbors (for boundary detection only):**
 
-- **Phase 02:** Fluxo completo de criação de conta, confirmação por e-mail, login, logout e recuperação de senha. (Cadastro, Login e Gerenciamento de Conta)
-- **Phase 04:** Edição das informações do vídeo, fluxo de rascunho e publicação, painel de administração do canal e página pública. (Gerenciamento de Vídeos e Canal; Depende de: Fase 02, Fase 03)
+- **Phase 02:** Fluxo completo de criação de conta, confirmação por e-mail, login, logout e recuperação de senha. (Title: "Cadastro, Login e Gerenciamento de Conta")
+- **Phase 04:** Edição das informações do vídeo, fluxo de rascunho e publicação, painel de administração do canal e página pública. (Title: "Gerenciamento de Vídeos e Canal". Depende de: Fase 02, Fase 03)
 
 ## Decisions Index
 
 | Ref | Source | Scope | Topic | Status | Decision | Libraries |
 |-----|--------|-------|-------|--------|----------|-----------|
-| phase-03-videos/TD-01 | phase | Backend | Object Storage Server and S3 Client SDK | decided | A (MinIO + `@aws-sdk/client-s3` v3, Chainguard image pinned by digest) | — |
-| phase-03-videos/TD-02 | phase | Cross-layer | Bucket Topology and Object Access Policy | decided | B (private `videos` + public-read `thumbnails`) | — |
-| phase-03-videos/TD-03 | phase | Cross-layer | Client-Facing Storage Endpoint for Presigned URLs | decided | A (dual endpoint `S3_ENDPOINT` + `S3_PUBLIC_ENDPOINT`) | — |
-| phase-03-videos/TD-04 | phase | Cross-layer | Large-File Upload Protocol (up to 10GB, resumable) | decided | A (S3 Multipart, per-part presigned URLs, API-orchestrated) | — |
+| phase-03-videos/TD-01 | phase | Backend | Object Storage Server and S3 Client SDK | decided | A (MinIO, `cgr.dev/chainguard/minio` pinned by digest, plus `@aws-sdk/client-s3` v3) | — |
+| phase-03-videos/TD-02 | phase | Cross-layer | Bucket Topology and Object Access Policy | decided | B (private `videos` bucket and public-read `thumbnails` bucket) | — |
+| phase-03-videos/TD-03 | phase | Cross-layer | Client-Facing Storage Endpoint for Presigned URLs | decided | A (dual endpoint: `S3_ENDPOINT` + `S3_PUBLIC_ENDPOINT`) | — |
+| phase-03-videos/TD-04 | phase | Cross-layer | Large-File Upload Protocol (up to 10GB, resumable) | decided | A (S3 Multipart with per-part presigned URLs, orchestrated by the API) | — |
 | phase-03-videos/TD-05 | phase | Frontend | Browser Upload Client Implementation | decided | B (in-house uploader module) | — |
-| phase-03-videos/TD-06 | phase | Cross-layer | Upload Limits, Part Size and Abandoned-Upload Cleanup | decided | A (server-dictated limits + queue cleanup job) | — |
+| phase-03-videos/TD-06 | phase | Cross-layer | Upload Limits, Part Size and Abandoned-Upload Cleanup | decided | A (limits set by the server and an application-level cleanup job) | — |
 | phase-03-videos/TD-07 | phase | Backend | Background Job Queue | decided | A (BullMQ + Redis via `@nestjs/bullmq`) | — |
 | phase-03-videos/TD-08 | phase | Backend | Video Worker Deployment Topology | decided | A (separate container, same codebase, second entrypoint) | — |
 | phase-03-videos/TD-09 | phase | Backend | Processing Trigger | decided | A (API enqueues on `complete`) | — |
-| phase-03-videos/TD-10 | phase | Backend | Media Inspection Tooling and Input Access | decided | A (ffprobe/ffmpeg CLI via `child_process`, presigned HTTP input) | — |
-| phase-03-videos/TD-11 | phase | Cross-layer | Streaming Format and Browser Playability | decided | A (progressive playback of original + ffprobe playability gate) | — |
-| phase-03-videos/TD-12 | phase | Cross-layer | Streaming and Download Delivery Path | decided | C (stable BFF URL → 302 to fresh presigned URL) | — |
-| phase-03-videos/TD-13 | phase | Cross-layer | Unique Public Video Identifier (URL ID) | decided | A (11-char CSPRNG ID via `node:crypto` + UNIQUE + retry) | — |
-| phase-03-videos/TD-14 | phase | Cross-layer | Video Lifecycle State Model and Processing Failure Policy | decided | A (processing `status` enum, separate from Phase 04 publication) | — |
+| phase-03-videos/TD-10 | phase | Backend | Media Inspection Tooling and Input Access | decided | A (ffprobe/ffmpeg CLI via `child_process`, input over a presigned HTTP URL) | — |
+| phase-03-videos/TD-11 | phase | Cross-layer | Streaming Format and Browser Playability | decided | A (progressive playback of the original plus an ffprobe playability gate) | — |
+| phase-03-videos/TD-12 | phase | Cross-layer | Streaming and Download Delivery Path | decided | C (stable BFF URL that returns a 302 to a freshly presigned URL) | — |
+| phase-03-videos/TD-13 | phase | Cross-layer | Unique Public Video Identifier (URL ID) | decided | A (11-char CSPRNG ID via `node:crypto` + `UNIQUE` + retry) | — |
+| phase-03-videos/TD-14 | phase | Cross-layer | Video Lifecycle State Model and Processing Failure Policy | decided | A (processing-lifecycle `status` enum, kept separate from Phase 04 publication) | — |
 
 _Source files:_
 
-- phase-03-videos — `docs/decisions/technical-decisions-phase-03-videos.md` (scope_type: phase, related_phases: [3])
+- phase-03-videos — `docs/decisions/technical-decisions-phase-03-videos.md` (scope_type: phase)
 
 ## Capability Coverage
 
@@ -82,7 +86,7 @@ _Source files:_
 
 ### phase-03-videos/TD-01
 
-**Recommendation:** **Option A**, with the SDK fixed as `@aws-sdk/client-s3` v3. MinIO's behavior is the closest to AWS for the exact features this phase depends on (multipart, per-part presigning, Range GETs). Pin the image to an exact tag, never `latest`. Because all code talks plain S3 through the AWS SDK, switching to Garage, SeaweedFS or real S3 later is only a Compose and env change. Choose B if you would rather not depend on a frozen image at all.
+**Recommendation:** MinIO, with the SDK fixed as `@aws-sdk/client-s3` v3. MinIO's behavior is the closest to AWS for the exact features this phase depends on (multipart, per-part presigning, Range GETs). Pin the image to an exact tag, never `latest`. Because all code talks plain S3 through the AWS SDK, switching to Garage, SeaweedFS or real S3 later is only a Compose and env change. Choose B if you would rather not depend on a frozen image at all.
 **Libraries:** —
 
 ### phase-03-videos/TD-02
@@ -142,7 +146,7 @@ _Source files:_
 
 ### phase-03-videos/TD-13
 
-**Recommendation:** **Option A**, generated with `node:crypto` (no dependency, no ESM/Jest friction). It is the only option that is short, unguessable for Phase 04's unlisted videos, and guaranteed conflict-free by the DB `UNIQUE` constraint, which is the literal capability. Storage object keys use the internal UUID (TD-02), so the public ID can be rotated later without moving objects.
+**Recommendation:** An 11-char CSPRNG ID, generated with `node:crypto` (no dependency, no ESM/Jest friction). It is the only option that is short, unguessable for Phase 04's unlisted videos, and guaranteed conflict-free by the DB `UNIQUE` constraint, which is the literal capability. Storage object keys use the internal UUID (TD-02), so the public ID can be rotated later without moving objects.
 **Libraries:** —
 
 ### phase-03-videos/TD-14
@@ -277,7 +281,7 @@ _Source files:_
 
 ### openapi-docs-nestjs/TD-01
 
-**Recommendation:** é a única opção que preserva as decisões anteriores (`class-validator` em TD-06 de phase-02-auth) sem re-platform; o CLI plugin com `classValidatorShim: true` aproveita os decoradores `class-validator` existentes para inferir schemas, mantendo o boilerplate baixo. Nestia tem mérito técnico real mas o custo de migração do stack de validação inviabiliza-a sem uma decisão upstream de supersede de TD-06. Manual authoring é descartado.
+**Recommendation:** Option A (`@nestjs/swagger`) — é a única opção que preserva as decisões anteriores (`class-validator` em TD-06 de phase-02-auth) sem re-platform; o CLI plugin com `classValidatorShim: true` aproveita os decoradores `class-validator` existentes para inferir schemas, mantendo o boilerplate baixo. Nestia tem mérito técnico real mas o custo de migração do stack de validação inviabiliza-a sem uma decisão upstream de supersede de TD-06. Manual authoring é descartado.
 **Libraries:** @nestjs/swagger
 **Revisions:**
 
@@ -285,21 +289,21 @@ _Source files:_
 
 ### openapi-docs-nestjs/TD-02
 
-**Recommendation:** o custo marginal sobre Option A é apenas um npm script (~15 linhas) e o benefício é uma fundação correta para futura integração FE (codegen offline) sem perder a UI interativa que dev/QA usam. Option B sozinho pune a experiência de desenvolvimento em dev/local; Option A sozinho compromete o pipeline de codegen futuro. Combinar é dominante.
+**Recommendation:** Option C (Ambos) — o custo marginal sobre Option A é apenas um npm script (~15 linhas) e o benefício é uma fundação correta para futura integração FE (codegen offline) sem perder a UI interativa que dev/QA usam. Option B sozinho pune a experiência de desenvolvimento em dev/local; Option A sozinho compromete o pipeline de codegen futuro. Combinar é dominante.
 **Libraries:** —
 
 ### openapi-docs-nestjs/TD-03
 
-**Recommendation:** alinha com a postura defensiva já estabelecida em phase 02 e não compromete consumidores legítimos (o `openapi.json` commitado em TD-02 cumpre o papel de "spec consultável fora da UI"). Re-abrir como Option A ou C é trivial no futuro se um caso de uso de API pública aparecer.
+**Recommendation:** Option B (Apenas em dev/staging) — alinha com a postura defensiva já estabelecida em phase 02 e não compromete consumidores legítimos (o `openapi.json` commitado em TD-02 cumpre o papel de "spec consultável fora da UI"). Re-abrir como Option A ou C é trivial no futuro se um caso de uso de API pública aparecer.
 **Libraries:** —
 
 ## Inherited Conventions
 
 - Backend config uses `@nestjs/config` with namespaced `registerAs(name, () => ({...}))` factories — one file per domain in `src/config/`. _(from phase 01)_
-- Env variables are validated by a Joi schema in `src/config/env.validation.ts`, passed to `ConfigModule.forRoot({ validationSchema, ... _(from phase 01)_
-- Config is injected into modules via `ConfigType<typeof xxxConfig>` and `@Inject(xxxConfig.KEY)`; the same factory is importable as a plain... _(from phase 01)_
+- Env variables are validated by a Joi schema in `src/config/env.validation.ts`, passed to `ConfigModule.forRoot({ validationSchema, validationOptions: {...` _(from phase 01)_
+- Config is injected into modules via `ConfigType<typeof xxxConfig>` and `@Inject(xxxConfig.KEY)`; the same factory is importable as a plain function... _(from phase 01)_
 - `data-source.ts` loads `.env` via `import 'dotenv/config'` at the top, then imports `databaseConfig` and calls it as a plain function. _(from phase 01)_
-- Database connection parameters (host, port, etc.) are sourced from a single `databaseConfig` factory — never duplicated between `AppModule` and... _(from phase 01)_
+- Database connection parameters (host, port, etc.) are sourced from a single `databaseConfig` factory — never duplicated between `AppModule` and `data-source.ts`. _(from phase 01)_
 - `TypeOrmModule.forRootAsync` is used (not `forRoot`), with `imports: [ConfigModule]`, `inject: [databaseConfig.KEY]`, `useFactory` returning... _(from phase 01)_
 
 ## Inherited Deferred Capabilities
@@ -343,20 +347,21 @@ _None._
 | Interceptor (response transform, logging) | Unit and/or E2E |
 | Exception Filter | Unit + E2E |
 | Middleware | E2E |
+| Future types (e.g. queue processors, worker entrypoint) | See `artifacts/future-types.md` |
 
 ### next-frontend
 
 | Artifact type | Required layers |
 |---------------|-----------------|
-| Page — sync RSC, static, no logic | None at component level; cover only if part of a critical flow → `*.e2e-spec.ts` |
-| Page — sync RSC composing client children | Test client children directly; cover rendered page via `*.e2e-spec.ts` |
-| Page — async RSC | `*.e2e-spec.ts` only — Vitest cannot render it |
-| Layout (`layout.tsx`) | None unless it adds logic (auth gate, conditional render); else via E2E |
-| Client component (`"use client"`) with state/handlers | `*.test.tsx` — RTL + `jsdom` docblock, mock `next/navigation`, MSW for fetch |
-| Feature component (server, composes primitives) | Skip unit; cover via the page's E2E |
-| shadcn UI primitive (`components/ui/*`) | None — trust the library; cover via consumers |
-| Icon (`components/icons/*`) | None |
-| `lib/` utility / boundary module with branching or shape assumptions | `*.test.ts` |
-| Custom hook (`hooks/*`) | `*.test.ts(x)` with `renderHook`, `jsdom` docblock |
-| Route handler (`app/api/**/route.ts`) — proxy or with branching | `*.integration.test.ts` with MSW (+ `*.test.ts` for extracted pure logic) |
-| Server action / middleware / error-loading-not-found / metadata | See guide — depends on type |
+| **Page** — sync RSC, static, no logic | None at component level; cover only if part of a critical flow → `*.e2e-spec.ts` |
+| **Page** — sync RSC composing client children | Test client children directly; cover rendered page via `*.e2e-spec.ts` |
+| **Page** — async RSC (`async function Page()` with `await`) | `*.e2e-spec.ts` only — Vitest cannot render it |
+| **Layout** (`layout.tsx`) | None unless it adds logic (auth gate, conditional render); else via E2E |
+| **Client component** (`"use client"`) with state/handlers | `*.test.tsx` — RTL + `jsdom` docblock, mock `next/navigation`, MSW for fetch |
+| **Feature component** (server, composes primitives) | Skip unit; cover via the page's E2E |
+| **shadcn UI primitive** (`components/ui/*`) | None — trust the library; cover via consumers |
+| **Icon** (`components/icons/*`) | None |
+| **`lib/` utility / boundary module** with branching or shape assumptions | `*.test.ts` |
+| **Custom hook** (`hooks/*`) | `*.test.ts(x)` with `renderHook`, `jsdom` docblock |
+| **Route handler** (`app/api/**/route.ts`) — proxy or with branching | `*.integration.test.ts` with MSW (+ `*.test.ts` for extracted pure logic) |
+| **Server action / middleware / error-loading-not-found / metadata** | See guide — depends on type |
