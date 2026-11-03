@@ -27,7 +27,7 @@
   - A regra de entidades pede os dois lados da relação, então entrou `Channel.videos` (`@OneToMany`). Por isso `Video` foi adicionado aos `ALL_ENTITIES` das 10 suítes que carregam `Channel`. Sem ele, o TypeORM falha na metadata.
   - O `VideosModule` foi criado já nesta SI, só com `forFeature([Video])` + `VideosRepository` e registrado no `AppModule`, para o app continuar subindo (o `Channel` referencia `Video`). A SI-03.6 completa o módulo.
   - `migrations.integration-spec.ts`: entrou `CreateVideos`. Os `DROP TABLE` do setup passaram a ser sequenciais, porque em paralelo davam deadlock com a FK `videos → channels`. O setup também passou a dropar os enums `verification_tokens_type_enum` e `video_status`, que sobram das suítes com `synchronize: true`.
-  - O banco local de dev não tem nenhuma linha na tabela `migrations`, porque o schema veio do `synchronize` dos testes. Por isso o `npm run migration:run` falha com "relation already exists". Isso é anterior a esta fase. Para usar as migrations em dev é preciso recriar o banco.
+  - Na época desta SI, o banco local de dev não tinha nenhuma linha na tabela `migrations` (o schema veio do `synchronize` dos testes) e o `npm run migration:run` falhava com "relation already exists". **Atualização pós-fase:** o `migrations.integration-spec.ts` da verificação final deixou o banco migrado, e hoje as 3 migrations estão registradas e o `migration:run` responde "No migrations are pending". A causa de fundo continua: dev e testes usam o mesmo banco `streamtube`, e as suítes com `synchronize: true` podem divergir do schema das migrations e apagar dados de dev. Sugestão de task: banco separado para testes.
   - `size_bytes` (bigint) e `duration_seconds` (numeric) usam um transformer para voltar como `number`, porque o `pg` devolve esses tipos como string.
   - Rodar o prettier por diretório reescreveu arquivos não tocados só no line ending (`core.autocrlf=true`), sem diff de conteúdo. A partir daqui, o prettier roda só nos arquivos editados.
 
@@ -116,3 +116,34 @@
 - **Type-check** (`npx tsc --noEmit`): OK.
 - **Lint** (`npx eslint "{src,apps,libs,test}/**/*.ts" --max-warnings 0`, sem `--fix`): OK.
 - **Build** (`npm run build`): OK.
+
+## Smoke manual — upload de arquivo grande
+
+### Rodada 1 — 4,35 GiB
+
+Executado em 2026-11-03, fora da suíte, conforme o roteiro da fase ("não subir 10GB na suíte; smoke manual com alguns GB").
+
+- **Arquivo:** vídeo real gerado com ffmpeg dentro do container (`testsrc2` 1080p + ruído por frame, h264 lossless + aac, 40 s). Tamanho: **4.675.755.417 bytes (4,35 GiB)**. O ruído impede compressão, então o arquivo fica grande de verdade e continua tocável.
+- **Como rodou:** script Node no container `nestjs-api`, com a API subida in-process a partir do `dist/` (como no e2e, sem servidor de dev). Usuário dedicado, criado e removido no fim. O processamento ficou com o container `video-worker` real.
+- **Upload:** 70 partes de 64 MiB, 4 em paralelo, direto no MinIO por URL assinada. Levou **67,2 s (~66 MiB/s)**.
+  - Bytes enviados à API: **4.937** (só JSON). Bytes enviados ao storage: **4.675.755.417**. O arquivo não passou pela API.
+  - `GET /upload/parts` antes do complete listou as 70 partes, e o `complete` respondeu `202`.
+  - O RSS do processo do script chegou a 1,29 GiB, mas por causa dos buffers de 64 MiB do próprio script (4 partes em memória ao mesmo tempo, no mesmo processo da API in-process). Não é consumo da API, que só recebeu os 4.937 bytes.
+- **Processamento:** `ready` em **8 s**: ffprobe/ffmpeg leram por HTTP Range, sem baixar os 4,35 GiB. Metadados: 1920×1080, h264/aac, mp4, duração 40 s, bitrate ~935 Mbps. Thumbnail pública respondeu `200`.
+- **Stream:** `Range: bytes=0-1023` → `206` (`bytes 0-1023/4675755417`). Último 1 MiB → `206` (`bytes 4674706841-4675755416/4675755417`).
+- **Download:** `206` em `Range: bytes=0-0`, com `Content-Disposition: attachment; filename="smoke-large.mp4"`.
+- **Limpeza:** objeto original, thumbnail, linha do vídeo e usuário removidos. O arquivo de 4,7 GB e o script foram apagados do `/tmp` do container.
+
+### Rodada 2 — 10,52 GB (9,80 GiB), no limite do requisito "até 10GB"
+
+Feita logo depois da primeira, com o mesmo script, para provar o tamanho do requisito (o limite aceito pela API é 10 GiB = 10.737.418.240 bytes).
+
+- **Arquivo:** vídeo real gerado igual ao da rodada 1, com 90 s. Tamanho: **10.520.564.693 bytes (10,52 GB / 9,80 GiB)**, 98% do limite.
+- **Upload:** **157 partes** de 64 MiB, 4 em paralelo, direto ao MinIO, em **260,5 s (~38,5 MiB/s)**.
+  - Bytes enviados à API: **10.900** (só JSON: init, 2 lotes de part-urls, list, complete). Bytes enviados ao storage: **10.520.564.693**.
+  - `GET /upload/parts` listou as 157 partes, e o `complete` respondeu `202`.
+  - O RSS do script teve o mesmo pico da rodada 1 (**1,29 GiB**) com mais que o dobro do tamanho. A memória depende da concorrência (4 × 64 MiB), não do tamanho do arquivo.
+- **Processamento:** `ready` em **10 s** (8 s na rodada 1). A leitura por Range torna o tempo praticamente independente do tamanho. Metadados: 1920×1080, h264/aac, mp4, 90 s. Thumbnail `200`.
+- **Stream:** `206` em `bytes 0-1023/10520564693` e no último MiB (`bytes 10519516117-10520564692/10520564693`).
+- **Download:** `206` com `Content-Disposition: attachment; filename="smoke-10g.mp4"`.
+- **Limpeza:** objeto, thumbnail, linha e usuário removidos. O arquivo de 10,5 GB e o script foram apagados do `/tmp` do container. O bucket `videos` voltou aos 38 MiB das fixtures de teste.
