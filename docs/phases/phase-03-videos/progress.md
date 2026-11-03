@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 5/11 completed
+**SIs:** 6/11 completed
 
 ### SI-03.1 — Infra: object storage, Redis e contrato de env
 - **Status:** completed
@@ -50,9 +50,14 @@
   - Aparece o aviso de deprecação do pg "client.query() when the client is already executing a query" nas suítes de integração. Ele já existia antes e vem do TypeORM/pg, sem falha associada.
 
 ### SI-03.6 — Endpoints de upload (VideosController)
-- **Status:** pending
-- **Tests:** 
-- **Observations:** 
+- **Status:** completed
+- **Tests:** 9 passing (1 de compilação do módulo + 8 e2e do spec `videos-upload.plan.md`)
+- **Observations:**
+  - Os DTOs de request seguem `.claude/rules/nestjs-dtos.md`: só `class-validator` + JSDoc, sem `@ApiProperty`. Os DTOs de resposta têm `@ApiProperty`. Como o `openapi:export` roda com ts-node (sem o plugin do Swagger), os schemas de request saem sem propriedades no `openapi.json`, o mesmo comportamento dos DTOs de auth que já existiam.
+  - `sizeBytes` e `contentType` não têm limite/allowlist no DTO, de propósito. Assim os erros de domínio `VIDEO_TOO_LARGE` e `UNSUPPORTED_VIDEO_TYPE` (do contrato) aparecem, em vez de um 400 genérico de validação.
+  - O cenário 1.5 (`abort-upload-removes-draft`) verifica o `GET /videos/:id` → `404` só pelo status. A rota de detalhe só existe na SI-03.11, então por enquanto o 404 é de rota inexistente. A SI-03.11 cobre o `VIDEO_NOT_FOUND` no detalhe.
+  - Os helpers de e2e (`test/helpers/videos-e2e.helpers.ts`: app com pipes/filters do `main.ts`, registro+confirmação+login, PUT direto no storage) ficam compartilhados com o e2e da SI-03.11.
+  - O `openapi.json` foi regenerado com as 5 rotas de upload.
 
 ### SI-03.7 — Infra: entrypoint e container do video worker
 - **Status:** pending
