@@ -74,6 +74,10 @@ export class VideosRepository {
       .getOne();
   }
 
+  async findById(id: string): Promise<Video | null> {
+    return this.repository.findOne({ where: { id } });
+  }
+
   /** Bumps `updated_at` so an active upload is not treated as abandoned. */
   async touch(id: string): Promise<void> {
     await this.repository

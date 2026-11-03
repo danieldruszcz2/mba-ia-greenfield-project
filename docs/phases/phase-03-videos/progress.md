@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 7/11 completed
+**SIs:** 8/11 completed
 
 ### SI-03.1 — Infra: object storage, Redis e contrato de env
 - **Status:** completed
@@ -72,9 +72,15 @@
   - O prettier converteu as aspas do `compose.yaml` inteiro. A mudança foi revertida e só o bloco `video-worker` foi reaplicado, para não misturar mudança cosmética com a funcional.
 
 ### SI-03.8 — Implementar VideoProcessor (metadados, thumbnail e status)
-- **Status:** pending
-- **Tests:** 
-- **Observations:** 
+- **Status:** completed
+- **Tests:** 24 passing (unit do codec gate + integração com ffprobe/ffmpeg reais + processor com DB/MinIO/Redis); tsc e eslint limpos
+- **Observations:**
+  - As fixtures `test/fixtures/sample.mp4` (h264/aac, 5 s, 72 KB) e `unplayable.avi` (mpeg4, 33 KB) foram geradas com o ffmpeg do container (`testsrc` + `sine`).
+  - O handler de falha usa `@OnWorkerEvent('failed')` do `@nestjs/bullmq`, equivalente ao `worker.on('failed')` em `onApplicationBootstrap` que o plano cita. Ele só marca `failed` na última tentativa (`attemptsMade >= attempts`) ou quando o erro é `UnrecoverableError` (codec). Nas tentativas intermediárias, não faz nada.
+  - O container vem do `format_name` do ffprobe (`mov,mp4,...` → `mp4`, `matroska,webm` → `webm`). Áudio ausente é aceito pelo gate.
+  - Um vídeo apagado entre o enqueue e o processamento (ex.: abort) gera só um warning, e o job termina sem erro.
+  - O critério de aceite "lê por HTTP Range, sem baixar o arquivo inteiro" não tem teste próprio. Ele vem da forma de entrada: o ffprobe/ffmpeg recebe a URL assinada, sem cópia local.
+  - `VideosRepository.findById` foi adicionado para o worker.
 
 ### SI-03.9 — Limpeza agendada de uploads abandonados
 - **Status:** pending
