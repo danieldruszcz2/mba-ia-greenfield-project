@@ -6,9 +6,14 @@ import { StorageService } from '../storage/storage.service';
 import type {
   CompletedPart,
   PresignedPartUrls,
+  PresignedUrl,
   UploadedPart,
 } from '../storage/storage.types';
-import { type Video, VideoStatus } from './entities/video.entity';
+import {
+  type Video,
+  type VideoMetadata,
+  VideoStatus,
+} from './entities/video.entity';
 import {
   ALLOWED_VIDEO_CONTENT_TYPES,
   S3_INVALID_PARTS_ERROR_NAMES,
@@ -19,6 +24,7 @@ import {
   InvalidUploadPartsException,
   UnsupportedVideoTypeException,
   VideoNotFoundException,
+  VideoNotReadyException,
   VideoTooLargeException,
   VideoUploadNotInProgressException,
 } from './videos.exceptions';
@@ -41,6 +47,19 @@ export interface InitiatedUpload {
 export interface CompletedUpload {
   id: string;
   status: VideoStatus;
+}
+
+export interface VideoDetail {
+  id: string;
+  title: string;
+  status: VideoStatus;
+  sizeBytes: number;
+  contentType: string;
+  durationSeconds: number | null;
+  metadata: VideoMetadata | null;
+  thumbnailUrl: string | null;
+  failureReason: string | null;
+  createdAt: Date;
 }
 
 const partCountOf = (video: Pick<Video, 'size_bytes' | 'part_size_bytes'>) =>
@@ -194,6 +213,44 @@ export class VideosService {
     await this.videosRepository.deleteById(video.id);
   }
 
+  async getDetail(publicId: string, userId: string): Promise<VideoDetail> {
+    const video = await this.findOwnedOrFail(publicId, userId);
+    return {
+      id: video.public_id,
+      title: video.title,
+      status: video.status,
+      sizeBytes: video.size_bytes,
+      contentType: video.content_type,
+      durationSeconds: video.duration_seconds,
+      metadata: video.metadata,
+      thumbnailUrl: video.thumbnail_key
+        ? this.storageService.buildPublicThumbnailUrl(video.thumbnail_key)
+        : null,
+      failureReason: video.failure_reason,
+      createdAt: video.created_at,
+    };
+  }
+
+  /** Short-lived URL; storage answers the player's `Range` requests with 206. */
+  async getStreamUrl(publicId: string, userId: string): Promise<PresignedUrl> {
+    const video = await this.findReadyOrFail(publicId, userId);
+    return this.storageService.presignGetObject(video.storage_key, {
+      client: 'public',
+    });
+  }
+
+  /** Same as the stream URL, but forces `Content-Disposition: attachment`. */
+  async getDownloadUrl(
+    publicId: string,
+    userId: string,
+  ): Promise<PresignedUrl> {
+    const video = await this.findReadyOrFail(publicId, userId);
+    return this.storageService.presignGetObject(video.storage_key, {
+      client: 'public',
+      downloadFilename: video.original_filename,
+    });
+  }
+
   async findOwnedOrFail(publicId: string, userId: string): Promise<Video> {
     const video = await this.videosRepository.findOwnedByPublicId(
       publicId,
@@ -201,6 +258,17 @@ export class VideosService {
     );
     if (!video) {
       throw new VideoNotFoundException();
+    }
+    return video;
+  }
+
+  private async findReadyOrFail(
+    publicId: string,
+    userId: string,
+  ): Promise<Video> {
+    const video = await this.findOwnedOrFail(publicId, userId);
+    if (video.status !== VideoStatus.READY) {
+      throw new VideoNotReadyException();
     }
     return video;
   }

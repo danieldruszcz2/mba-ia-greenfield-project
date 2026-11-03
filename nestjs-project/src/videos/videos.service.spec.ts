@@ -8,6 +8,7 @@ import {
   InvalidUploadPartsException,
   UnsupportedVideoTypeException,
   VideoNotFoundException,
+  VideoNotReadyException,
   VideoTooLargeException,
   VideoUploadNotInProgressException,
 } from './videos.exceptions';
@@ -252,6 +253,155 @@ describe('VideosService (upload)', () => {
         'upload-1',
       );
       expect(repository.deleteById).toHaveBeenCalledWith('video-uuid');
+    });
+  });
+});
+
+describe('VideosService (read & delivery)', () => {
+  let service: VideosService;
+  const repository = { findOwnedByPublicId: jest.fn() };
+  const storage = {
+    presignGetObject: jest.fn(),
+    buildPublicThumbnailUrl: jest.fn(),
+  };
+  const createdAt = new Date('2026-11-03T10:00:00Z');
+  const readyVideo = (overrides: Partial<Video> = {}): Video =>
+    buildVideo({
+      status: VideoStatus.READY,
+      upload_id: null,
+      title: 'Meu vídeo',
+      content_type: 'video/mp4',
+      original_filename: 'clip.mp4',
+      duration_seconds: 5,
+      metadata: {
+        container: 'mp4',
+        videoCodec: 'h264',
+        audioCodec: 'aac',
+        width: 320,
+        height: 240,
+        bitrate: 100000,
+      },
+      thumbnail_key: 'video-uuid.jpg',
+      failure_reason: null,
+      created_at: createdAt,
+      ...overrides,
+    });
+
+  beforeEach(async () => {
+    jest.resetAllMocks();
+    const module = await Test.createTestingModule({
+      providers: [
+        VideosService,
+        { provide: VideosRepository, useValue: repository },
+        { provide: ChannelsService, useValue: {} },
+        { provide: StorageService, useValue: storage },
+        { provide: VideoProcessingProducer, useValue: {} },
+      ],
+    }).compile();
+    service = module.get(VideosService);
+  });
+
+  describe('getDetail', () => {
+    it('should map a ready video to the public detail shape', async () => {
+      repository.findOwnedByPublicId.mockResolvedValue(readyVideo());
+      storage.buildPublicThumbnailUrl.mockReturnValue(
+        'http://minio:9000/thumbnails/video-uuid.jpg',
+      );
+
+      const detail = await service.getDetail('pubId123456', USER_ID);
+
+      expect(detail).toEqual({
+        id: 'pubId123456',
+        title: 'Meu vídeo',
+        status: VideoStatus.READY,
+        sizeBytes: PART * 2,
+        contentType: 'video/mp4',
+        durationSeconds: 5,
+        metadata: expect.objectContaining({ videoCodec: 'h264' }) as unknown,
+        thumbnailUrl: 'http://minio:9000/thumbnails/video-uuid.jpg',
+        failureReason: null,
+        createdAt,
+      });
+      expect(storage.buildPublicThumbnailUrl).toHaveBeenCalledWith(
+        'video-uuid.jpg',
+      );
+    });
+
+    it('should return a null thumbnailUrl while the video has no thumbnail', async () => {
+      repository.findOwnedByPublicId.mockResolvedValue(
+        readyVideo({
+          status: VideoStatus.UPLOADING,
+          thumbnail_key: null,
+          duration_seconds: null,
+          metadata: null,
+        }),
+      );
+
+      const detail = await service.getDetail('pubId123456', USER_ID);
+
+      expect(detail.thumbnailUrl).toBeNull();
+      expect(detail.durationSeconds).toBeNull();
+      expect(storage.buildPublicThumbnailUrl).not.toHaveBeenCalled();
+    });
+
+    it('should throw VideoNotFoundException for videos of other users', async () => {
+      repository.findOwnedByPublicId.mockResolvedValue(null);
+
+      await expect(
+        service.getDetail('pubId123456', USER_ID),
+      ).rejects.toBeInstanceOf(VideoNotFoundException);
+    });
+  });
+
+  describe('getStreamUrl / getDownloadUrl', () => {
+    it.each([
+      VideoStatus.UPLOADING,
+      VideoStatus.PROCESSING,
+      VideoStatus.FAILED,
+    ])(
+      'should throw VideoNotReadyException when status is %s',
+      async (status) => {
+        repository.findOwnedByPublicId.mockResolvedValue(
+          readyVideo({ status }),
+        );
+
+        await expect(
+          service.getStreamUrl('pubId123456', USER_ID),
+        ).rejects.toBeInstanceOf(VideoNotReadyException);
+        await expect(
+          service.getDownloadUrl('pubId123456', USER_ID),
+        ).rejects.toBeInstanceOf(VideoNotReadyException);
+        expect(storage.presignGetObject).not.toHaveBeenCalled();
+      },
+    );
+
+    it('should sign the stream URL with the public client', async () => {
+      repository.findOwnedByPublicId.mockResolvedValue(readyVideo());
+      const signed = { url: 'http://signed', expiresAt: new Date() };
+      storage.presignGetObject.mockResolvedValue(signed);
+
+      await expect(service.getStreamUrl('pubId123456', USER_ID)).resolves.toBe(
+        signed,
+      );
+      expect(storage.presignGetObject).toHaveBeenCalledWith(
+        'video-uuid/original',
+        { client: 'public' },
+      );
+    });
+
+    it('should sign the download URL as an attachment with the original filename', async () => {
+      repository.findOwnedByPublicId.mockResolvedValue(readyVideo());
+      storage.presignGetObject.mockResolvedValue({
+        url: 'http://signed',
+        expiresAt: new Date(),
+      });
+
+      await service.getDownloadUrl('pubId123456', USER_ID);
+
+      expect(storage.presignGetObject).toHaveBeenCalledWith(
+        'video-uuid/original',
+        { client: 'public', downloadFilename: 'clip.mp4' },
+      );
     });
   });
 });

@@ -37,3 +37,9 @@ export class InvalidUploadPartsException extends DomainException {
     super('INVALID_UPLOAD_PARTS', 400, detail);
   }
 }
+
+export class VideoNotReadyException extends DomainException {
+  constructor() {
+    super('VIDEO_NOT_READY', 409, 'The video is not ready yet');
+  }
+}

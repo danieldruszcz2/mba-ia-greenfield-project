@@ -22,6 +22,7 @@ import { Video, VideoStatus } from './entities/video.entity';
 import {
   InvalidUploadPartsException,
   VideoNotFoundException,
+  VideoNotReadyException,
 } from './videos.exceptions';
 import { VideosModule } from './videos.module';
 import { VideosService } from './videos.service';
@@ -205,5 +206,106 @@ describe('VideosService upload lifecycle (integration: DB + MinIO + Redis)', () 
     await expect(
       service.listUploadedParts(id, otherUserId),
     ).rejects.toBeInstanceOf(VideoNotFoundException);
+  });
+  describe('read & delivery', () => {
+    /** Builds a `ready` video: the original stored in `videos` and a thumbnail. */
+    const createReadyVideo = async (): Promise<{ id: string; key: string }> => {
+      const { id } = await service.initiateUpload(ownerId, {
+        title: 'Pronto',
+        filename: 'clip.mp4',
+        contentType: 'video/mp4',
+        sizeBytes: 4096,
+      });
+      const video = await dataSource
+        .getRepository(Video)
+        .findOneByOrFail({ public_id: id });
+      await storage.abortMultipartUpload(
+        video.storage_key,
+        video.upload_id as string,
+      );
+      await storage.putObject(
+        storage.videosBucket,
+        video.storage_key,
+        Buffer.alloc(4096, 'v'),
+        'video/mp4',
+      );
+      await storage.putObject(
+        storage.thumbnailsBucket,
+        `${video.id}.jpg`,
+        Buffer.from('jpeg-bytes'),
+        'image/jpeg',
+      );
+      await dataSource.getRepository(Video).update(video.id, {
+        status: VideoStatus.READY,
+        upload_id: null,
+        duration_seconds: 5,
+        thumbnail_key: `${video.id}.jpg`,
+      });
+      return { id, key: video.storage_key };
+    };
+
+    it('should expose a thumbnailUrl reachable without authentication', async () => {
+      const { id } = await createReadyVideo();
+
+      const detail = await service.getDetail(id, ownerId);
+
+      expect(detail.status).toBe(VideoStatus.READY);
+      expect(detail.durationSeconds).toBe(5);
+      const response = await fetch(detail.thumbnailUrl as string);
+      expect(response.status).toBe(200);
+    });
+
+    it('should return nulls in the detail of a video still uploading', async () => {
+      const { id } = await service.initiateUpload(ownerId, {
+        title: 'Clip',
+        filename: 'clip.mp4',
+        contentType: 'video/mp4',
+        sizeBytes: 1000,
+      });
+
+      const detail = await service.getDetail(id, ownerId);
+
+      expect(detail.thumbnailUrl).toBeNull();
+      expect(detail.durationSeconds).toBeNull();
+    });
+
+    it('should serve the stream URL with 206 for a Range request', async () => {
+      const { id } = await createReadyVideo();
+
+      const { url, expiresAt } = await service.getStreamUrl(id, ownerId);
+      const response = await fetch(url, {
+        headers: { Range: 'bytes=0-1023' },
+      });
+
+      expect(response.status).toBe(206);
+      expect((await response.arrayBuffer()).byteLength).toBe(1024);
+      expect(expiresAt.getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it('should serve the download URL as an attachment with the original filename', async () => {
+      const { id } = await createReadyVideo();
+
+      const { url } = await service.getDownloadUrl(id, ownerId);
+      const response = await fetch(url);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-disposition')).toContain(
+        'attachment; filename="clip.mp4"',
+      );
+    });
+
+    it('should refuse stream and download URLs while the video is processing', async () => {
+      const { id } = await createReadyVideo();
+      await dataSource
+        .getRepository(Video)
+        .update({ public_id: id }, { status: VideoStatus.PROCESSING });
+
+      await expect(service.getStreamUrl(id, ownerId)).rejects.toBeInstanceOf(
+        VideoNotReadyException,
+      );
+      await expect(service.getDownloadUrl(id, ownerId)).rejects.toBeInstanceOf(
+        VideoNotReadyException,
+      );
+    });
   });
 });

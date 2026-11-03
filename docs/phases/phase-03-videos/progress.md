@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 9/11 completed
+**SIs:** 10/11 completed
 
 ### SI-03.1 — Infra: object storage, Redis e contrato de env
 - **Status:** completed
@@ -92,9 +92,12 @@
   - Se um abort falhar no meio, o erro propaga: o job falha e o lote é refeito na próxima hora. Como o abort é idempotente, refazer é seguro.
 
 ### SI-03.10 — Implementar leitura e entrega no VideosService
-- **Status:** pending
-- **Tests:** 
-- **Observations:** 
+- **Status:** completed
+- **Tests:** 34 passing (suítes unit + integration do `VideosService`, com os casos novos de leitura e entrega); tsc e eslint limpos
+- **Observations:**
+  - Stream e download exigem `status = ready` e lançam `VIDEO_NOT_READY` (409) nos outros status, incluindo `failed`. O TD-14 trata de quem pode acessar (só o dono, em qualquer status). Quando a URL pode ser gerada é uma regra à parte, porque antes do `ready` não existe um objeto tocável.
+  - O detalhe devolve `thumbnailUrl` pela URL pública estável do bucket `thumbnails`, sem assinatura. `durationSeconds`, `metadata` e `thumbnailUrl` vêm `null` até o worker terminar.
+  - No teste de integração, o vídeo `ready` é montado direto (objeto em `videos` + thumbnail + update de status), sem passar pelo worker. O fluxo completo com o worker fica no e2e da SI-03.11.
 
 ### SI-03.11 — Endpoints de detalhe, stream e download
 - **Status:** pending
