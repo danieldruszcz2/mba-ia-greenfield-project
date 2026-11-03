@@ -1,6 +1,6 @@
 # phase-03-videos — Progress
 
-**Status:** in_progress
+**Status:** completed
 **SIs:** 11/11 completed
 
 ### SI-03.1 — Infra: object storage, Redis e contrato de env
@@ -108,3 +108,11 @@
   - **Follow-up fora do escopo:** o `ThrottlerGuard` da fase 02 está registrado como `APP_GUARD` global (10 req/min por rota/IP) e se aplica a todas as rotas, inclusive `/videos`. O `phase-02-auth/TD-08` diz que ele ficaria restrito ao `AuthModule`. Um cliente real que faça polling no detalhe (ou player que renove a URL de stream) vai receber 429. Vale abrir uma task para escopar o throttler.
   - No e2e de upload, o cenário 1.5 (abort) passou a verificar também `error: VIDEO_NOT_FOUND`, agora que a rota de detalhe existe.
   - O `openapi.json` foi regenerado com as 8 rotas da fase. Os DTOs de resposta (`VideoDetailDto`, `VideoMetadataDto`, `SignedUrlDto`) têm `@ApiProperty`.
+
+## Final verification
+
+- **Unit + integration** (`npm test -- --runInBand`): 38/38 suites, 244/244 testes, ~318 s.
+- **E2E** (`npm run test:e2e`): 5/5 suites, 66/66 testes, ~141 s. Na primeira execução, 57 de 66 falharam porque as suítes rodaram em paralelo contra o mesmo banco: o script `test:e2e` nunca teve `--runInBand`, embora o `nestjs-project/CLAUDE.md` diga que já tinha. O problema é anterior à fase e apareceu com as duas suítes novas de vídeo. Correção: `--runInBand` adicionado ao script.
+- **Type-check** (`npx tsc --noEmit`): OK.
+- **Lint** (`npx eslint "{src,apps,libs,test}/**/*.ts" --max-warnings 0`, sem `--fix`): OK.
+- **Build** (`npm run build`): OK.
