@@ -1,6 +1,6 @@
 services:
   nestjs-api:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile.dev
     ports:
@@ -12,6 +12,10 @@ services:
         condition: service_healthy
       mailpit:
         condition: service_started
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
 
   db:
     image: postgres:17
@@ -33,4 +37,49 @@ services:
       - "1025:1025"
       - "8025:8025"
 
+  # Object storage (S3-compatible). Chainguard rebuild pinned by digest, never `latest`.
+  # The image ships without a shell, so readiness is gated by `minio-init` instead of a healthcheck.
+  minio:
+    image: cgr.dev/chainguard/minio@sha256:3c60a2a8c4d33409a9bc7a623a7fcbfb4605adc3d89422d2f53b3f673a6e5597
+    command: ["server", "/data", "--console-address", ":9001"]
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=${S3_ACCESS_KEY}
+      - MINIO_ROOT_PASSWORD=${S3_SECRET_KEY}
+    volumes:
+      - minio-data:/data
 
+  # One-shot, idempotent: waits for MinIO, creates the buckets and makes only `thumbnails` public-read.
+  minio-init:
+    image: cgr.dev/chainguard/minio-client@sha256:9dc099d7951b8e1b257042713a3b1bfbf231fb21dc60455c6c349a29d2b42ad9
+    depends_on:
+      - minio
+    environment:
+      - MC_HOST_local=http://${S3_ACCESS_KEY}:${S3_SECRET_KEY}@minio:9000
+      - S3_BUCKET_VIDEOS=${S3_BUCKET_VIDEOS}
+      - S3_BUCKET_THUMBNAILS=${S3_BUCKET_THUMBNAILS}
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        until mc ready local >/dev/null 2>&1; do sleep 1; done
+        mc mb --ignore-existing "local/$$S3_BUCKET_VIDEOS"
+        mc mb --ignore-existing "local/$$S3_BUCKET_THUMBNAILS"
+        mc anonymous set none "local/$$S3_BUCKET_VIDEOS"
+        mc anonymous set download "local/$$S3_BUCKET_THUMBNAILS"
+    restart: "no"
+
+  redis:
+    image: redis@sha256:489a769e0a54dc245896132a15c72d2bc7296719954da99398f43a3877e5f8eb
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  minio-data:
