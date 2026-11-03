@@ -12,6 +12,7 @@ import redisConfig from './config/redis.config';
 import storageConfig from './config/storage.config';
 import swaggerConfig from './config/swagger.config';
 import { envValidationSchema } from './config/env.validation';
+import { QueueModule } from './queue/queue.module';
 import { VideosModule } from './videos/videos.module';
 
 @Module({
@@ -44,6 +45,7 @@ import { VideosModule } from './videos/videos.module';
         synchronize: false,
       }),
     }),
+    QueueModule,
     AuthModule,
     VideosModule,
   ],

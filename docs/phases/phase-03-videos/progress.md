@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 3/11 completed
+**SIs:** 4/11 completed
 
 ### SI-03.1 — Infra: object storage, Redis e contrato de env
 - **Status:** completed
@@ -32,9 +32,12 @@
   - Rodar o prettier por diretório reescreveu arquivos não tocados só no line ending (`core.autocrlf=true`), sem diff de conteúdo. A partir daqui, o prettier roda só nos arquivos editados.
 
 ### SI-03.4 — Configurar fila BullMQ e producer de processamento
-- **Status:** pending
-- **Tests:** 
-- **Observations:** 
+- **Status:** completed
+- **Tests:** 5 passing (+ 7 e2e de smoke do AppModule passando, sem open handles)
+- **Observations:**
+  - No BullMQ v6, `ioredis` virou peer dependency opcional e precisa ser instalado explicitamente. Sem ele o `new Queue` quebra com "could not load the optional 'ioredis' package". Foi instalado `ioredis@^5.11.1`. Essa mudança não aparecia na doc da v6 consultada no Context7.
+  - O `QueueModule` exporta `BullModule` (as filas) e `VideoProcessingProducer`, para o worker da SI-03.7 reaproveitar as mesmas filas.
+  - O `AppModule` agora depende do Redis para subir, então as suítes e2e precisam do `redis` do Compose rodando.
 
 ### SI-03.5 — Implementar ciclo de upload no VideosService
 - **Status:** pending
