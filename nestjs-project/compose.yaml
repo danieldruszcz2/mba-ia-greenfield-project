@@ -17,6 +17,35 @@ services:
       minio-init:
         condition: service_completed_successfully
 
+  # Video worker: same image/codebase as the API, second entrypoint, no HTTP port.
+  video-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    # node runs directly (not via `npm run`) so SIGTERM ends the container with exit code 0.
+    command:
+      [
+        "node",
+        "--watch-path=src",
+        "--require",
+        "ts-node/register",
+        "--require",
+        "tsconfig-paths/register",
+        "src/worker.ts",
+      ]
+    environment:
+      # Type-checking is covered by `tsc --noEmit`; skipping it here keeps the boot fast.
+      - TS_NODE_TRANSPILE_ONLY=true
+    volumes:
+      - .:/home/node/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
   db:
     image: postgres:17
     ports:

@@ -9,6 +9,12 @@ import { DomainExceptionFilter } from '../../src/common/filters/domain-exception
 import { ValidationExceptionFilter } from '../../src/common/filters/validation-exception.filter';
 import { MailService } from '../../src/mail/mail.service';
 
+/**
+ * Booting AppModule (and the first ts-jest compile after an image rebuild)
+ * takes well over Jest's default 5 s hook timeout.
+ */
+export const E2E_SETUP_TIMEOUT_MS = 60_000;
+
 /** Smallest size S3 accepts for every multipart part except the last. */
 export const MIN_PART_BYTES = 5 * 1024 * 1024;
 

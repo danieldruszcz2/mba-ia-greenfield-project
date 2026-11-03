@@ -30,4 +30,5 @@ export const envValidationSchema = Joi.object({
   S3_BUCKET_THUMBNAILS: Joi.string().required(),
   REDIS_HOST: Joi.string().required(),
   REDIS_PORT: Joi.number().port().required(),
+  QUEUE_PREFIX: Joi.string().default('bull'),
 });

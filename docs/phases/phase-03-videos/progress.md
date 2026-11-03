@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 6/11 completed
+**SIs:** 7/11 completed
 
 ### SI-03.1 — Infra: object storage, Redis e contrato de env
 - **Status:** completed
@@ -60,9 +60,16 @@
   - O `openapi.json` foi regenerado com as 5 rotas de upload.
 
 ### SI-03.7 — Infra: entrypoint e container do video worker
-- **Status:** pending
-- **Tests:** 
-- **Observations:** 
+- **Status:** completed
+- **Tests:** 22 passing (worker.module + suítes afetadas pelo refactor) + 9 e2e (upload + app) com cache frio do Jest; tsc e eslint limpos
+- **Observations:**
+  - A config do `ConfigModule` e a do TypeORM foram extraídas para `src/config/config-module.options.ts` e `src/database/typeorm-options.factory.ts`, usadas pelo `AppModule` e pelo `WorkerModule`. Assim a mesma config não fica duplicada nos dois.
+  - O `WorkerModule` importa `UsersModule` só para a metadata da entidade `User`, já que o `Video` chega nela pelo `Channel`. O `VideosModule` passou a exportar o `VideosRepository` para os processors das SI-03.8/03.9.
+  - Novo `QUEUE_PREFIX` (default `bull`), e os testes usam `bull-test` via `test/setup-test-env.ts`. Sem isso, o container `video-worker` consumiria os jobs criados pelos testes assim que o processor existir.
+  - No compose, o worker roda `node --watch-path=src` + ts-node direto, sem `npm run`. Pelo npm, o container saía com exit 1 no SIGTERM. Também ganhou `TS_NODE_TRANSPILE_ONLY=true`: o boot caiu de ~90 s para ~35 s (o type-check continua com `tsc --noEmit`). O shutdown leva ~2 s e sai com exit 0.
+  - O primeiro e2e depois do rebuild da imagem falhou com o cache frio do ts-jest. O `beforeAll` passou dos 5 s e a conexão Redis deu `ETIMEDOUT`. Como o `afterAll` quebrava antes do `app.close()`, o Jest ficou preso nos open handles. Correção: `E2E_SETUP_TIMEOUT_MS = 60s` nos hooks e teardown protegido. Validado com `jest --clearCache`.
+  - Ambiente: o disco `C:` encheu durante o rebuild e o Docker Desktop travou com erro de I/O. O usuário migrou o disco do Docker para outro HD. O CLI do Docker agora fica em `AppData/Local/Programs/DockerDesktop/resources/bin`, que não está no PATH deste shell.
+  - O prettier converteu as aspas do `compose.yaml` inteiro. A mudança foi revertida e só o bloco `video-worker` foi reaplicado, para não misturar mudança cosmética com a funcional.
 
 ### SI-03.8 — Implementar VideoProcessor (metadados, thumbnail e status)
 - **Status:** pending

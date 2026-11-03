@@ -16,6 +16,7 @@ import { Video, VideoStatus } from '../src/videos/entities/video.entity';
 import {
   clearThrottler,
   createE2eApp,
+  E2E_SETUP_TIMEOUT_MS,
   MIN_PART_BYTES,
   putPartToStorage,
   registerConfirmAndLogin,
@@ -81,11 +82,13 @@ describe('videos-upload', () => {
     processingQueue = moduleFixture.get(
       getQueueToken(QUEUE_NAMES.VIDEO_PROCESSING),
     );
-  });
+  }, E2E_SETUP_TIMEOUT_MS);
 
   afterAll(async () => {
-    await processingQueue.obliterate({ force: true });
-    await app.close();
+    // Guarded: if beforeAll failed, still close whatever was created so the
+    // Redis connections do not keep Jest alive.
+    await processingQueue?.obliterate({ force: true });
+    await app?.close();
   });
 
   beforeEach(async () => {
@@ -94,7 +97,7 @@ describe('videos-upload', () => {
     clearThrottler(moduleFixture);
     ownerToken = await registerConfirmAndLogin(app, 'owner@example.com');
     otherToken = await registerConfirmAndLogin(app, 'other@example.com');
-  });
+  }, E2E_SETUP_TIMEOUT_MS);
 
   // 1. Upload lifecycle — POST /videos, part-urls, parts, complete, abort
 

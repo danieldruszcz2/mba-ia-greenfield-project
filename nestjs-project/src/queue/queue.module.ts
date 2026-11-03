@@ -15,6 +15,7 @@ import { VideoProcessingProducer } from './video-processing.producer';
       inject: [redisConfig.KEY],
       useFactory: (redis: ConfigType<typeof redisConfig>) => ({
         connection: { host: redis.host, port: redis.port },
+        prefix: redis.queuePrefix,
       }),
     }),
     BullModule.registerQueue(
