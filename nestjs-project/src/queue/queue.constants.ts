@@ -13,6 +13,8 @@ export const VIDEO_PROCESSING_JOB_OPTIONS = {
   backoff: { type: 'exponential', delay: 1000 },
 } as const;
 
+export const ABANDONED_UPLOAD_CLEANUP_EVERY_MS = 60 * 60 * 1000;
+
 export interface ProcessVideoJobData {
   videoId: string;
 }

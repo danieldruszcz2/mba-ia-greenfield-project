@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 8/11 completed
+**SIs:** 9/11 completed
 
 ### SI-03.1 — Infra: object storage, Redis e contrato de env
 - **Status:** completed
@@ -83,9 +83,13 @@
   - `VideosRepository.findById` foi adicionado para o worker.
 
 ### SI-03.9 — Limpeza agendada de uploads abandonados
-- **Status:** pending
-- **Tests:** 
-- **Observations:** 
+- **Status:** completed
+- **Tests:** 13 passing (7 da limpeza + 6 das suítes do worker afetadas pelo novo registro); tsc e eslint limpos
+- **Observations:**
+  - O `upsertJobScheduler` está num provider separado, `UploadCleanupScheduler` (`OnApplicationBootstrap`), e não dentro do processor. Assim ele roda só no worker e o teste consegue chamá-lo direto.
+  - O teste da limpeza usa `compile()` sem `init()`: os workers do BullMQ ficam parados e o teste chama `process()` e o scheduler direto. Isso evita corrida com o job que o scheduler dispara no boot.
+  - Para envelhecer a linha, o `updated_at` é ajustado com SQL cru (`now() - make_interval(...)`), porque o `@UpdateDateColumn` sobrescreveria o valor em qualquer `save`/`update`.
+  - Se um abort falhar no meio, o erro propaga: o job falha e o lote é refeito na próxima hora. Como o abort é idempotente, refazer é seguro.
 
 ### SI-03.10 — Implementar leitura e entrega no VideosService
 - **Status:** pending

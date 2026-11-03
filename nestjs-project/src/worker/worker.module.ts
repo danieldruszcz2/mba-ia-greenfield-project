@@ -8,6 +8,8 @@ import { StorageModule } from '../storage/storage.module';
 import { UsersModule } from '../users/users.module';
 import { VideosModule } from '../videos/videos.module';
 import { MediaProbeService } from './media-probe.service';
+import { UploadCleanupProcessor } from './upload-cleanup.processor';
+import { UploadCleanupScheduler } from './upload-cleanup.scheduler';
 import { VideoProcessor } from './video.processor';
 
 /**
@@ -30,6 +32,11 @@ import { VideoProcessor } from './video.processor';
     StorageModule,
     QueueModule,
   ],
-  providers: [MediaProbeService, VideoProcessor],
+  providers: [
+    MediaProbeService,
+    VideoProcessor,
+    UploadCleanupProcessor,
+    UploadCleanupScheduler,
+  ],
 })
 export class WorkerModule {}

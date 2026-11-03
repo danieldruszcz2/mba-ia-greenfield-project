@@ -9,6 +9,9 @@ export const VIDEO_UPLOAD_LIMITS = {
   MAX_PART_URLS_PER_REQUEST: 100,
 } as const;
 
+/** An `uploading` draft untouched for longer than this is treated as abandoned. */
+export const ABANDONED_UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
+
 export const ALLOWED_VIDEO_CONTENT_TYPES = ['video/mp4', 'video/webm'] as const;
 
 /** S3 error names returned by CompleteMultipartUpload for a bad part list. */

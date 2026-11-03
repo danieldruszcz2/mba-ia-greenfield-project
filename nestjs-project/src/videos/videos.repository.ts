@@ -1,6 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { DataSource, QueryFailedError, type Repository } from 'typeorm';
-import { Video } from './entities/video.entity';
+import {
+  DataSource,
+  LessThan,
+  QueryFailedError,
+  type Repository,
+} from 'typeorm';
+import { Video, VideoStatus } from './entities/video.entity';
 import { generatePublicId } from './public-id.util';
 import { PUBLIC_ID_MAX_ATTEMPTS } from './videos.constants';
 
@@ -72,6 +77,13 @@ export class VideosRepository {
       .where('video.public_id = :publicId', { publicId })
       .andWhere('channel.user_id = :userId', { userId })
       .getOne();
+  }
+
+  /** `uploading` drafts whose last activity is older than `before`. */
+  async findAbandonedUploads(before: Date): Promise<Video[]> {
+    return this.repository.find({
+      where: { status: VideoStatus.UPLOADING, updated_at: LessThan(before) },
+    });
   }
 
   async findById(id: string): Promise<Video | null> {
