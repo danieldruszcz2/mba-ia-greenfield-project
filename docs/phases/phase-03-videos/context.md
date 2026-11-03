@@ -3,7 +3,7 @@ kind: phase
 name: phase-03-videos
 sources_mtime:
   docs/project-plan.md: "2026-11-02T15:44:08.945348500-03:00"
-  docs/decisions/technical-decisions-phase-03-videos.md: "2026-11-03T09:19:56.677357900-03:00"
+  docs/decisions/technical-decisions-phase-03-videos.md: "2026-11-03T09:39:15.880306000-03:00"
   docs/decisions/technical-decisions-openapi-docs-nestjs.md: "2026-11-02T15:44:08.923761000-03:00"
   docs/phases/phase-01-configuracao-base/context.md: "2026-11-02T15:44:08.937785400-03:00"
   docs/phases/phase-02-auth/context.md: "2026-11-02T15:44:08.943342200-03:00"
@@ -46,20 +46,20 @@ Upload de arquivos grandes sem travar o sistema, processamento automático do v�
 
 | Ref | Source | Scope | Topic | Status | Decision | Libraries | Capability |
 |-----|--------|-------|-------|--------|----------|-----------|------------|
-| phase-03-videos/TD-01 | phase | Backend | Object Storage Server and S3 Client SDK | pending | — | — | Serviço de armazenamento de arquivos (vídeos e thumbnails) |
-| phase-03-videos/TD-02 | phase | Cross-layer | Bucket Topology and Object Access Policy | pending | — | — | Transversal — covers: Serviço de armazenamento de arquivos (vídeos e thumbnails); Geração automática de thumbnail a partir de um frame do vídeo |
-| phase-03-videos/TD-03 | phase | Cross-layer | Client-Facing Storage Endpoint for Presigned URLs | pending | — | — | Transversal — covers: Serviço de armazenamento de arquivos (vídeos e thumbnails); Upload de vídeos com suporte a arquivos de até 10GB sem impacto na performance; Reprodução via streaming (sem necessidade de download completo); Download do vídeo pelo usuário |
-| phase-03-videos/TD-04 | phase | Cross-layer | Large-File Upload Protocol (up to 10GB, resumable) | pending | — | — | Upload de vídeos com suporte a arquivos de até 10GB sem impacto na performance |
-| phase-03-videos/TD-05 | phase | Cross-layer | Upload Limits, Part Size and Abandoned-Upload Cleanup | pending | — | — | Transversal — covers: Upload de vídeos com suporte a arquivos de até 10GB sem impacto na performance; Pré-cadastro automático do vídeo como rascunho ao iniciar o upload |
-| phase-03-videos/TD-06 | phase | Backend | Background Job Queue | pending | — | — | Serviço de processamento em segundo plano (filas) |
-| phase-03-videos/TD-07 | phase | Backend | Video Worker Deployment Topology | pending | — | — | Transversal — covers: Serviço de processamento em segundo plano (filas); Processamento automático do vídeo após upload (extração de duração e metadados); Geração automática de thumbnail a partir de um frame do vídeo |
-| phase-03-videos/TD-08 | phase | Backend | Processing Trigger | pending | — | — | Processamento automático do vídeo após upload (extração de duração e metadados) |
-| phase-03-videos/TD-09 | phase | Backend | Media Inspection Tooling and Input Access | pending | — | — | Transversal — covers: Processamento automático do vídeo após upload (extração de duração e metadados); Geração automática de thumbnail a partir de um frame do vídeo |
-| phase-03-videos/TD-10 | phase | Cross-layer | Streaming Format and Playability | pending | — | — | Reprodução via streaming (sem necessidade de download completo) |
-| phase-03-videos/TD-11 | phase | Cross-layer | Streaming and Download Delivery Endpoint Contract | pending | — | — | Transversal — covers: Reprodução via streaming (sem necessidade de download completo); Download do vídeo pelo usuário |
-| phase-03-videos/TD-12 | phase | Cross-layer | Unique Public Video Identifier (URL ID) | pending | — | — | URL única por vídeo, sem conflito com outros vídeos |
-| phase-03-videos/TD-13 | phase | Cross-layer | Video Lifecycle State Model and Processing Failure Policy | pending | — | — | Transversal — covers: Pré-cadastro automático do vídeo como rascunho ao iniciar o upload; Processamento automático do vídeo após upload (extração de duração e metadados) |
-| phase-03-videos/TD-14 | phase | Cross-layer | Access Policy for Streaming and Download by Video Status | pending | — | — | Transversal — covers: Reprodução via streaming (sem necessidade de download completo); Download do vídeo pelo usuário |
+| phase-03-videos/TD-01 | phase | Backend | Object Storage Server and S3 Client SDK | decided | A (MinIO + @aws-sdk/client-s3 v3) | @aws-sdk/client-s3, @aws-sdk/s3-request-presigner | Serviço de armazenamento de arquivos (vídeos e thumbnails) |
+| phase-03-videos/TD-02 | phase | Cross-layer | Bucket Topology and Object Access Policy | decided | B (bucket videos privado + thumbnails público) | — | Transversal — covers: Serviço de armazenamento de arquivos (vídeos e thumbnails); Geração automática de thumbnail a partir de um frame do vídeo |
+| phase-03-videos/TD-03 | phase | Cross-layer | Client-Facing Storage Endpoint for Presigned URLs | decided | A (S3_ENDPOINT interno + S3_PUBLIC_ENDPOINT público) | — | Transversal — covers: Serviço de armazenamento de arquivos (vídeos e thumbnails); Upload de vídeos com suporte a arquivos de até 10GB sem impacto na performance; Reprodução via streaming (sem necessidade de download completo); Download do vídeo pelo usuário |
+| phase-03-videos/TD-04 | phase | Cross-layer | Large-File Upload Protocol (up to 10GB, resumable) | decided | A (S3 multipart com URL pré-assinada por parte) | @aws-sdk/client-s3, @aws-sdk/s3-request-presigner | Upload de vídeos com suporte a arquivos de até 10GB sem impacto na performance |
+| phase-03-videos/TD-05 | phase | Cross-layer | Upload Limits, Part Size and Abandoned-Upload Cleanup | decided | A (limites definidos pelo servidor + job de limpeza) | — | Transversal — covers: Upload de vídeos com suporte a arquivos de até 10GB sem impacto na performance; Pré-cadastro automático do vídeo como rascunho ao iniciar o upload |
+| phase-03-videos/TD-06 | phase | Backend | Background Job Queue | decided | A (BullMQ + Redis) | @nestjs/bullmq, bullmq | Serviço de processamento em segundo plano (filas) |
+| phase-03-videos/TD-07 | phase | Backend | Video Worker Deployment Topology | decided | A (container separado, mesmo código, segundo entrypoint) | — | Transversal — covers: Serviço de processamento em segundo plano (filas); Processamento automático do vídeo após upload (extração de duração e metadados); Geração automática de thumbnail a partir de um frame do vídeo |
+| phase-03-videos/TD-08 | phase | Backend | Processing Trigger | decided | A (API enfileira no complete) | — | Processamento automático do vídeo após upload (extração de duração e metadados) |
+| phase-03-videos/TD-09 | phase | Backend | Media Inspection Tooling and Input Access | decided | A (ffprobe/ffmpeg CLI via URL pré-assinada) | — | Transversal — covers: Processamento automático do vídeo após upload (extração de duração e metadados); Geração automática de thumbnail a partir de um frame do vídeo |
+| phase-03-videos/TD-10 | phase | Cross-layer | Streaming Format and Playability | decided | A (playback progressivo do original + gate de codec) | — | Reprodução via streaming (sem necessidade de download completo) |
+| phase-03-videos/TD-11 | phase | Cross-layer | Streaming and Download Delivery Endpoint Contract | decided | C (endpoints que devolvem { url, expiresAt }) | — | Transversal — covers: Reprodução via streaming (sem necessidade de download completo); Download do vídeo pelo usuário |
+| phase-03-videos/TD-12 | phase | Cross-layer | Unique Public Video Identifier (URL ID) | decided | A (ID aleatório de 11 chars + UNIQUE + retry) | — | URL única por vídeo, sem conflito com outros vídeos |
+| phase-03-videos/TD-13 | phase | Cross-layer | Video Lifecycle State Model and Processing Failure Policy | decided | A (enum de processamento separado da publicação) | — | Transversal — covers: Pré-cadastro automático do vídeo como rascunho ao iniciar o upload; Processamento automático do vídeo após upload (extração de duração e metadados) |
+| phase-03-videos/TD-14 | phase | Cross-layer | Access Policy for Streaming and Download by Video Status | decided | C (só o dono, qualquer status) | — | Transversal — covers: Reprodução via streaming (sem necessidade de download completo); Download do vídeo pelo usuário |
 
 _Source files:_
 
@@ -81,7 +81,75 @@ _Source files:_
 
 ## Decisions Detail
 
-_No decided TDs yet._
+### phase-03-videos/TD-01
+
+**Recommendation:** MinIO is the closest to AWS for exactly the features this phase relies on (multipart, per-part presign, Range GET), and the AWS SDK keeps every line of code plain S3. Switching servers later is then only a Compose and env change. Pin the image by digest, never `latest`. Pick B if depending on a frozen upstream is unacceptable.
+**Libraries:** @aws-sdk/client-s3, @aws-sdk/s3-request-presigner
+
+### phase-03-videos/TD-02
+
+**Recommendation:** Thumbnails appear in every listing from Phase 04 onwards, so a stable URL in the API payload matters more than having a single bucket. Originals, which carry the real access rules, stay fully private. Object keys use the internal UUID, not the public ID (TD-12), so public thumbnail URLs cannot be enumerated. Buckets and policies are created by an idempotent init service in Compose.
+**Libraries:** —
+
+### phase-03-videos/TD-03
+
+**Recommendation:** It is the only option that follows the CLAUDE.md networking rule and still returns usable signed URLs, and it keeps bytes off the Node processes. Proposed canonical keys: `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `S3_REGION`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET_VIDEOS`, `S3_BUCKET_THUMBNAILS`, plus `REDIS_HOST`/`REDIS_PORT` for TD-06. Final names are fixed in planning. The internal/public split is the decision. The worker signs its ffprobe/ffmpeg input URLs with the **internal** client (TD-09), because it runs inside the Docker network.
+**Libraries:** —
+
+### phase-03-videos/TD-04
+
+**Recommendation:** It is the only option where the 10GB payload never touches a Node process, which is the literal requirement, and it gives resume through `ListParts` without a custom protocol server. The extra calls are small JSON requests. Depends on TD-03 (signing endpoint) and is detailed by TD-05 (limits and cleanup).
+**Libraries:** @aws-sdk/client-s3, @aws-sdk/s3-request-presigner
+
+### phase-03-videos/TD-05
+
+**Recommendation:** It is the only option where cleanup behaves the same on MinIO and S3, and the only one that also cleans the draft row the capability creates. The cleanup reuses the TD-06 queue through a Job Scheduler, so it adds no infrastructure. Thresholds are policy parameters. Suggested values for planning: 64 MiB parts, 10 GiB max, 24h staleness window, allowlist matching TD-10.
+**Libraries:** —
+
+### phase-03-videos/TD-06
+
+**Recommendation:** It matches the diagram's separate queue container, has the only first-party Nest integration of the three, and gives TD-13 (retries, idempotent `jobId`) and TD-05 (scheduled cleanup) what they need out of the box. pg-boss is the strongest alternative if avoiding new infrastructure becomes a priority.
+**Libraries:** @nestjs/bullmq, bullmq
+
+### phase-03-videos/TD-07
+
+**Recommendation:** It gives the isolation the diagram and the requirement ask for without duplicating the domain model. `createApplicationContext` is the idiomatic NestJS way to run a standalone worker.
+**Libraries:** —
+
+### phase-03-videos/TD-08
+
+**Recommendation:** Under TD-04-A the API already completes the upload, so enqueueing there is the simplest correct trigger and does not couple the code to storage-specific notification setup.
+**Libraries:** —
+
+### phase-03-videos/TD-09
+
+**Recommendation:** Probing and single-frame extraction never need the full file, so reading over HTTP Range avoids moving 10GB per job, and calling the CLI directly avoids a deprecated dependency. Frame policy is a planning parameter. Suggested: a frame at about 10% of the duration, clamped for very short videos.
+**Libraries:** —
+
+### phase-03-videos/TD-10
+
+**Recommendation:** It meets "streaming without full download" with zero transcoding and stays inside the phase's scope (duration, metadata, thumbnail). The codec gate turns "won't play" into an explicit `failed` state. B is the natural next step if format coverage becomes a requirement, and it would not change the delivery contract (TD-11).
+**Libraries:** —
+
+### phase-03-videos/TD-11
+
+**Recommendation:** It keeps the bytes off Node like A and D, but signs only when playback or download is requested, and its typed JSON response is the easiest contract for a future BFF to build on, whether that BFF passes the URL through or issues its own stable 302. D is equivalent on performance. Pick it if you want the redirect contract fixed in the API now.
+**Libraries:** —
+
+### phase-03-videos/TD-12
+
+**Recommendation:** with `node:crypto` (no dependency, no ESM/Jest friction). It is the only option that is short, unguessable for unlisted videos, and guaranteed conflict-free by the DB `UNIQUE` constraint, which is the literal capability. Storage keys use the internal UUID (TD-02), so the public ID could be rotated without moving objects.
+**Libraries:** —
+
+### phase-03-videos/TD-13
+
+**Recommendation:** It keeps the Phase 03 pipeline separate from Phase 04's publication flow, so that phase extends the model instead of rewriting it. It also gives the worker's retry policy (TD-06) one explicit terminal state.
+**Libraries:** —
+
+### phase-03-videos/TD-14
+
+**Recommendation:** In Phase 03 every video is a draft, so owner-only is the only rule that later phases extend instead of revoke. Note that the previous planning round (`validation.md` AMB-2, 2026-11-02) chose B as a temporary rule. Pick B again if you want a non-owner e2e scenario in this phase.
+**Libraries:** —
 
 ## Inherited Decisions Detail
 

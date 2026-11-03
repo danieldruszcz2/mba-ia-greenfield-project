@@ -1,7 +1,7 @@
 ---
 scope_type: phase
 related_phases: [3]
-status: pending
+status: decided
 date: 2026-11-03
 scope_description: "Backend-only video upload and processing foundation: object storage, background job queue and worker, resumable 10GB uploads, draft pre-registration, metadata/thumbnail extraction, unique public video IDs, streaming and download delivery (API side of every contract)."
 ---
@@ -54,7 +54,8 @@ _Scope input:_ `docs/topics/phase-03-backend-scope.md`.
 
 **Recommendation:** **Option A.** MinIO is the closest to AWS for exactly the features this phase relies on (multipart, per-part presign, Range GET), and the AWS SDK keeps every line of code plain S3. Switching servers later is then only a Compose and env change. Pin the image by digest, never `latest`. Pick B if depending on a frozen upstream is unacceptable.
 
-**Decision:** _[pending]_
+**Decision:** A (MinIO + @aws-sdk/client-s3 v3)
+**Libraries:** @aws-sdk/client-s3, @aws-sdk/s3-request-presigner
 
 ---
 
@@ -85,7 +86,7 @@ _Scope input:_ `docs/topics/phase-03-backend-scope.md`.
 
 **Recommendation:** **Option B.** Thumbnails appear in every listing from Phase 04 onwards, so a stable URL in the API payload matters more than having a single bucket. Originals, which carry the real access rules, stay fully private. Object keys use the internal UUID, not the public ID (TD-12), so public thumbnail URLs cannot be enumerated. Buckets and policies are created by an idempotent init service in Compose.
 
-**Decision:** _[pending]_
+**Decision:** B (bucket videos privado + thumbnails público)
 
 ---
 
@@ -116,7 +117,7 @@ _Scope input:_ `docs/topics/phase-03-backend-scope.md`.
 
 **Recommendation:** **Option A.** It is the only option that follows the CLAUDE.md networking rule and still returns usable signed URLs, and it keeps bytes off the Node processes. Proposed canonical keys: `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `S3_REGION`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET_VIDEOS`, `S3_BUCKET_THUMBNAILS`, plus `REDIS_HOST`/`REDIS_PORT` for TD-06. Final names are fixed in planning. The internal/public split is the decision. The worker signs its ffprobe/ffmpeg input URLs with the **internal** client (TD-09), because it runs inside the Docker network.
 
-**Decision:** _[pending]_
+**Decision:** A (S3_ENDPOINT interno + S3_PUBLIC_ENDPOINT público)
 
 ---
 
@@ -147,7 +148,8 @@ _Scope input:_ `docs/topics/phase-03-backend-scope.md`.
 
 **Recommendation:** **Option A.** It is the only option where the 10GB payload never touches a Node process, which is the literal requirement, and it gives resume through `ListParts` without a custom protocol server. The extra calls are small JSON requests. Depends on TD-03 (signing endpoint) and is detailed by TD-05 (limits and cleanup).
 
-**Decision:** _[pending]_
+**Decision:** A (S3 multipart com URL pré-assinada por parte)
+**Libraries:** @aws-sdk/client-s3, @aws-sdk/s3-request-presigner
 
 ---
 
@@ -178,7 +180,7 @@ _Scope input:_ `docs/topics/phase-03-backend-scope.md`.
 
 **Recommendation:** **Option A.** It is the only option where cleanup behaves the same on MinIO and S3, and the only one that also cleans the draft row the capability creates. The cleanup reuses the TD-06 queue through a Job Scheduler, so it adds no infrastructure. Thresholds are policy parameters. Suggested values for planning: 64 MiB parts, 10 GiB max, 24h staleness window, allowlist matching TD-10.
 
-**Decision:** _[pending]_
+**Decision:** A (limites definidos pelo servidor + job de limpeza)
 
 ---
 
@@ -209,7 +211,8 @@ _Scope input:_ `docs/topics/phase-03-backend-scope.md`.
 
 **Recommendation:** **Option A.** It matches the diagram's separate queue container, has the only first-party Nest integration of the three, and gives TD-13 (retries, idempotent `jobId`) and TD-05 (scheduled cleanup) what they need out of the box. pg-boss is the strongest alternative if avoiding new infrastructure becomes a priority.
 
-**Decision:** _[pending]_
+**Decision:** A (BullMQ + Redis)
+**Libraries:** @nestjs/bullmq, bullmq
 
 ---
 
@@ -240,7 +243,7 @@ _Scope input:_ `docs/topics/phase-03-backend-scope.md`.
 
 **Recommendation:** **Option A.** It gives the isolation the diagram and the requirement ask for without duplicating the domain model. `createApplicationContext` is the idiomatic NestJS way to run a standalone worker.
 
-**Decision:** _[pending]_
+**Decision:** A (container separado, mesmo código, segundo entrypoint)
 
 ---
 
@@ -266,7 +269,7 @@ _Scope input:_ `docs/topics/phase-03-backend-scope.md`.
 
 **Recommendation:** **Option A.** Under TD-04-A the API already completes the upload, so enqueueing there is the simplest correct trigger and does not couple the code to storage-specific notification setup.
 
-**Decision:** _[pending]_
+**Decision:** A (API enfileira no complete)
 
 ---
 
@@ -297,7 +300,7 @@ _Scope input:_ `docs/topics/phase-03-backend-scope.md`.
 
 **Recommendation:** **Option A.** Probing and single-frame extraction never need the full file, so reading over HTTP Range avoids moving 10GB per job, and calling the CLI directly avoids a deprecated dependency. Frame policy is a planning parameter. Suggested: a frame at about 10% of the duration, clamped for very short videos.
 
-**Decision:** _[pending]_
+**Decision:** A (ffprobe/ffmpeg CLI via URL pré-assinada)
 
 ---
 
@@ -328,7 +331,7 @@ _Scope input:_ `docs/topics/phase-03-backend-scope.md`.
 
 **Recommendation:** **Option A.** It meets "streaming without full download" with zero transcoding and stays inside the phase's scope (duration, metadata, thumbnail). The codec gate turns "won't play" into an explicit `failed` state. B is the natural next step if format coverage becomes a requirement, and it would not change the delivery contract (TD-11).
 
-**Decision:** _[pending]_
+**Decision:** A (playback progressivo do original + gate de codec)
 
 ---
 
@@ -364,7 +367,7 @@ _Scope input:_ `docs/topics/phase-03-backend-scope.md`.
 
 **Recommendation:** **Option C.** It keeps the bytes off Node like A and D, but signs only when playback or download is requested, and its typed JSON response is the easiest contract for a future BFF to build on, whether that BFF passes the URL through or issues its own stable 302. D is equivalent on performance. Pick it if you want the redirect contract fixed in the API now.
 
-**Decision:** _[pending]_
+**Decision:** C (endpoints que devolvem { url, expiresAt })
 
 ---
 
@@ -395,7 +398,7 @@ _Scope input:_ `docs/topics/phase-03-backend-scope.md`.
 
 **Recommendation:** **Option A** with `node:crypto` (no dependency, no ESM/Jest friction). It is the only option that is short, unguessable for unlisted videos, and guaranteed conflict-free by the DB `UNIQUE` constraint, which is the literal capability. Storage keys use the internal UUID (TD-02), so the public ID could be rotated without moving objects.
 
-**Decision:** _[pending]_
+**Decision:** A (ID aleatório de 11 chars + UNIQUE + retry)
 
 ---
 
@@ -426,7 +429,7 @@ _Scope input:_ `docs/topics/phase-03-backend-scope.md`.
 
 **Recommendation:** **Option A.** It keeps the Phase 03 pipeline separate from Phase 04's publication flow, so that phase extends the model instead of rewriting it. It also gives the worker's retry policy (TD-06) one explicit terminal state.
 
-**Decision:** _[pending]_
+**Decision:** A (enum de processamento separado da publicação)
 
 ---
 
@@ -457,7 +460,7 @@ _Scope input:_ `docs/topics/phase-03-backend-scope.md`.
 
 **Recommendation:** **Option C.** In Phase 03 every video is a draft, so owner-only is the only rule that later phases extend instead of revoke. Note that the previous planning round (`validation.md` AMB-2, 2026-11-02) chose B as a temporary rule. Pick B again if you want a non-owner e2e scenario in this phase.
 
-**Decision:** _[pending]_
+**Decision:** C (só o dono, qualquer status)
 
 ---
 
@@ -465,17 +468,17 @@ _Scope input:_ `docs/topics/phase-03-backend-scope.md`.
 
 | ID | Scope | Decision | Recommendation | Choice |
 |----|-------|----------|---------------|--------|
-| TD-01 | Backend | Object storage server and S3 client SDK | A — MinIO (Chainguard, digest-pinned) + `@aws-sdk/client-s3` v3 | _[pending]_ |
-| TD-02 | Cross-layer | Bucket topology and object access policy | B — private `videos` + public-read `thumbnails` | _[pending]_ |
-| TD-03 | Cross-layer | Client-facing storage endpoint for presigned URLs | A — `S3_ENDPOINT` (internal) + `S3_PUBLIC_ENDPOINT` (signing) | _[pending]_ |
-| TD-04 | Cross-layer | Large-file upload protocol (10GB, resumable) | A — S3 multipart, per-part presigned URLs, API-orchestrated | _[pending]_ |
-| TD-05 | Cross-layer | Upload limits, part size, abandoned-upload cleanup | A — server-dictated limits + Job Scheduler cleanup | _[pending]_ |
-| TD-06 | Backend | Background job queue | A — BullMQ + Redis (`@nestjs/bullmq`) | _[pending]_ |
-| TD-07 | Backend | Video worker deployment topology | A — separate container, same codebase, second entrypoint | _[pending]_ |
-| TD-08 | Backend | Processing trigger | A — API enqueues on `complete` | _[pending]_ |
-| TD-09 | Backend | Media inspection tooling and input access | A — direct ffprobe/ffmpeg CLI over presigned HTTP URL | _[pending]_ |
-| TD-10 | Cross-layer | Streaming format and playability | A — progressive original + ffprobe codec gate | _[pending]_ |
-| TD-11 | Cross-layer | Streaming and download delivery endpoint contract | C — dedicated signing endpoints returning `{ url, expiresAt }` | _[pending]_ |
-| TD-12 | Cross-layer | Unique public video identifier (URL ID) | A — 11-char CSPRNG ID + `UNIQUE` + retry | _[pending]_ |
-| TD-13 | Cross-layer | Video lifecycle state model and failure policy | A — processing `status` enum, separate from publication | _[pending]_ |
-| TD-14 | Cross-layer | Access policy for streaming/download by status | C — owner only in Phase 03 | _[pending]_ |
+| TD-01 | Backend | Object storage server and S3 client SDK | A — MinIO (Chainguard, digest-pinned) + `@aws-sdk/client-s3` v3 | A |
+| TD-02 | Cross-layer | Bucket topology and object access policy | B — private `videos` + public-read `thumbnails` | B |
+| TD-03 | Cross-layer | Client-facing storage endpoint for presigned URLs | A — `S3_ENDPOINT` (internal) + `S3_PUBLIC_ENDPOINT` (signing) | A |
+| TD-04 | Cross-layer | Large-file upload protocol (10GB, resumable) | A — S3 multipart, per-part presigned URLs, API-orchestrated | A |
+| TD-05 | Cross-layer | Upload limits, part size, abandoned-upload cleanup | A — server-dictated limits + Job Scheduler cleanup | A |
+| TD-06 | Backend | Background job queue | A — BullMQ + Redis (`@nestjs/bullmq`) | A |
+| TD-07 | Backend | Video worker deployment topology | A — separate container, same codebase, second entrypoint | A |
+| TD-08 | Backend | Processing trigger | A — API enqueues on `complete` | A |
+| TD-09 | Backend | Media inspection tooling and input access | A — direct ffprobe/ffmpeg CLI over presigned HTTP URL | A |
+| TD-10 | Cross-layer | Streaming format and playability | A — progressive original + ffprobe codec gate | A |
+| TD-11 | Cross-layer | Streaming and download delivery endpoint contract | C — dedicated signing endpoints returning `{ url, expiresAt }` | C |
+| TD-12 | Cross-layer | Unique public video identifier (URL ID) | A — 11-char CSPRNG ID + `UNIQUE` + retry | A |
+| TD-13 | Cross-layer | Video lifecycle state model and failure policy | A — processing `status` enum, separate from publication | A |
+| TD-14 | Cross-layer | Access policy for streaming/download by status | C — owner only in Phase 03 | C |
