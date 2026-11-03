@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 2/11 completed
+**SIs:** 3/11 completed
 
 ### SI-03.1 — Infra: object storage, Redis e contrato de env
 - **Status:** completed
@@ -21,9 +21,15 @@
   - O download manda `Content-Disposition` com `filename="..."` (ASCII) e também `filename*=UTF-8''...`, para nomes com acento.
 
 ### SI-03.3 — Criar entidade Video, migration e gerador de public_id
-- **Status:** pending
-- **Tests:** 
-- **Observations:** 
+- **Status:** completed
+- **Tests:** 75 passing (3 suítes novas + 11 suítes existentes afetadas, 2 rodadas seguidas sem flakiness)
+- **Observations:**
+  - A regra de entidades pede os dois lados da relação, então entrou `Channel.videos` (`@OneToMany`). Por isso `Video` foi adicionado aos `ALL_ENTITIES` das 10 suítes que carregam `Channel`. Sem ele, o TypeORM falha na metadata.
+  - O `VideosModule` foi criado já nesta SI, só com `forFeature([Video])` + `VideosRepository` e registrado no `AppModule`, para o app continuar subindo (o `Channel` referencia `Video`). A SI-03.6 completa o módulo.
+  - `migrations.integration-spec.ts`: entrou `CreateVideos`. Os `DROP TABLE` do setup passaram a ser sequenciais, porque em paralelo davam deadlock com a FK `videos → channels`. O setup também passou a dropar os enums `verification_tokens_type_enum` e `video_status`, que sobram das suítes com `synchronize: true`.
+  - O banco local de dev não tem nenhuma linha na tabela `migrations`, porque o schema veio do `synchronize` dos testes. Por isso o `npm run migration:run` falha com "relation already exists". Isso é anterior a esta fase. Para usar as migrations em dev é preciso recriar o banco.
+  - `size_bytes` (bigint) e `duration_seconds` (numeric) usam um transformer para voltar como `number`, porque o `pg` devolve esses tipos como string.
+  - Rodar o prettier por diretório reescreveu arquivos não tocados só no line ending (`core.autocrlf=true`), sem diff de conteúdo. A partir daqui, o prettier roda só nos arquivos editados.
 
 ### SI-03.4 — Configurar fila BullMQ e producer de processamento
 - **Status:** pending
