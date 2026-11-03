@@ -60,4 +60,35 @@ export class VideosRepository {
       }
     }
   }
+
+  /** Returns the video only when it belongs to the channel owned by `userId`. */
+  async findOwnedByPublicId(
+    publicId: string,
+    userId: string,
+  ): Promise<Video | null> {
+    return this.repository
+      .createQueryBuilder('video')
+      .innerJoin('video.channel', 'channel')
+      .where('video.public_id = :publicId', { publicId })
+      .andWhere('channel.user_id = :userId', { userId })
+      .getOne();
+  }
+
+  /** Bumps `updated_at` so an active upload is not treated as abandoned. */
+  async touch(id: string): Promise<void> {
+    await this.repository
+      .createQueryBuilder()
+      .update(Video)
+      .set({ updated_at: () => 'now()' })
+      .where('id = :id', { id })
+      .execute();
+  }
+
+  async update(id: string, changes: Partial<Video>): Promise<void> {
+    await this.repository.update({ id }, changes);
+  }
+
+  async deleteById(id: string): Promise<void> {
+    await this.repository.delete({ id });
+  }
 }

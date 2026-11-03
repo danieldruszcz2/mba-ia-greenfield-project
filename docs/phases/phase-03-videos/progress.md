@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 4/11 completed
+**SIs:** 5/11 completed
 
 ### SI-03.1 — Infra: object storage, Redis e contrato de env
 - **Status:** completed
@@ -40,9 +40,14 @@
   - O `AppModule` agora depende do Redis para subir, então as suítes e2e precisam do `redis` do Compose rodando.
 
 ### SI-03.5 — Implementar ciclo de upload no VideosService
-- **Status:** pending
-- **Tests:** 
-- **Observations:** 
+- **Status:** completed
+- **Tests:** 21 passing (+ e2e de smoke do AppModule passando)
+- **Observations:**
+  - O canal do usuário vem de um novo `ChannelsService.findByUserId`, para o `VideosService` não ler a entidade de outro domínio direto. O `VideosModule` importa `ChannelsModule`.
+  - O `id` (uuid) do vídeo é gerado na aplicação antes do insert, porque a `storage_key` (`{id}/original`) é necessária para abrir o multipart. Se o insert falhar, o multipart é abortado (compensação).
+  - Um `partNumbers` fora de `1..partCount` lança `INVALID_UPLOAD_PARTS` (400), reaproveitando o código do catálogo. O contrato fala genericamente em "400 validation error" para esse caso.
+  - A lista de nomes de erro do S3 mapeados para `INVALID_UPLOAD_PARTS` inclui `EntityTooSmall`, além de `InvalidPart`/`InvalidPartOrder`. Ele aparece quando uma parte intermediária tem menos de 5 MiB.
+  - Aparece o aviso de deprecação do pg "client.query() when the client is already executing a query" nas suítes de integração. Ele já existia antes e vem do TypeORM/pg, sem falha associada.
 
 ### SI-03.6 — Endpoints de upload (VideosController)
 - **Status:** pending
