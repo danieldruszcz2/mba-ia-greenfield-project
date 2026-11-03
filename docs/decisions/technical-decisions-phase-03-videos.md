@@ -1,25 +1,29 @@
 ---
 scope_type: phase
 related_phases: [3]
-status: decided
-date: 2026-11-02
-scope_description: "Video upload and processing foundation: object storage, background job queue and worker, resumable 10GB uploads, draft pre-registration, metadata/thumbnail extraction, unique public video IDs, streaming and download delivery."
+status: pending
+date: 2026-11-03
+scope_description: "Backend-only video upload and processing foundation: object storage, background job queue and worker, resumable 10GB uploads, draft pre-registration, metadata/thumbnail extraction, unique public video IDs, streaming and download delivery (API side of every contract)."
 ---
 
-# Technical Decisions — Phase 03: Video Upload & Processing
+# Technical Decisions — Phase 03: Video Upload & Processing (Backend)
 
 _Subprojects in scope:_
 
-- `nestjs-project/` — main subject: new `videos` domain, storage and queue integration, video worker entrypoint, new Compose services (object storage, Redis), env-key contract.
-- `next-frontend/` — upload client (browser → object storage via presigned URLs, orchestrated through BFF Route Handlers) and the consumer side of the streaming/download, URL-ID and thumbnail contracts. The watch page and player UI belong to Phase 05; only the contracts they depend on are decided here.
+- `nestjs-project/` — the only subproject with work in this phase: new `videos` domain, storage and queue integration, a video worker entrypoint, new Compose services (object storage, Redis), and the env-key contract. Its e2e suite plays the client role (it PUTs parts directly to storage and consumes the stream/download URLs).
+- `next-frontend/` — out of scope for the challenge (backend-only), no TD in this phase. Cross-layer TDs below describe **only the API side** of the contract that a future frontend phase will consume. They do not decide frontend implementation.
+
+_Scope input:_ `docs/topics/phase-03-backend-scope.md`.
 
 **Inherited constraints (not reopened):**
 
-- `next-frontend-config-base/TD-03` — **Strict BFF**: the browser never calls NestJS directly. That TD already said that video bytes would need "a separate mechanism (presigned URLs from object storage, NOT the backend URL)". Browser ↔ object storage traffic therefore does **not** violate the BFF rule. Browser ↔ NestJS traffic still goes through `app/api/**`.
-- `phase-01-configuracao-base/TD-01..04` — `@nestjs/config` + Joi validation + `registerAs` namespaces. New keys (storage, Redis) extend that schema.
-- `phase-02-auth/TD-02, TD-07, TD-08` — custom JWT guards, domain exception filter error shape, `@nestjs/throttler`.
-- `openapi-docs-nestjs/TD-02` + `next-frontend-openapi-typing/*` — every new endpoint is in the exported `openapi.json`. The FE consumes its types through `openapi-typescript`.
-- Testing of storage/queue integrations follows the existing `testing-guide-nestjs-project` rule ("Service with side-effect dep → integration against a real capture service"), the same way Mailpit is used today. No TD is needed for this.
+- `next-frontend-config-base/TD-03` — **Strict BFF**: in later phases the browser never calls NestJS directly. That TD already said video bytes need "a separate mechanism (presigned URLs from object storage, NOT the backend URL)". So browser ↔ object storage traffic is allowed, and every API endpoint decided here will later be called by a BFF Route Handler, not by the browser.
+- `phase-01-configuracao-base/TD-01..04` — `@nestjs/config` + Joi validation + `registerAs` namespaces. New storage and Redis keys extend that schema.
+- `phase-02-auth/TD-02, TD-07, TD-08` — custom JWT guards (global guard + `@Public`), the domain exception filter's error shape, and `@nestjs/throttler`.
+- `openapi-docs-nestjs/TD-02` — every new endpoint is part of the exported `openapi.json`.
+- Tests of storage and queue integrations follow the existing `testing-guide-nestjs-project` rule ("Service with side-effect dep → integration against a real capture service"), the same way Mailpit is used today (real MinIO and Redis from Compose). No TD is needed for this.
+
+**Version note (flagged per CLAUDE.md):** the NestJS 11 queues docs still show Bull's `repeat` job option. In BullMQ, `repeat` was deprecated in 5.16 and **removed in v6** in favor of Job Schedulers (`upsertJobScheduler`). TD-05 and TD-06 assume the Job Scheduler API.
 
 ---
 
@@ -29,28 +33,28 @@ _Subprojects in scope:_
 
 **Capability:** Serviço de armazenamento de arquivos (vídeos e thumbnails)
 
-**Context:** The architecture diagram says "S3 or MinIO". We need an S3-compatible service in `nestjs-project/compose.yaml` for dev and test, and an SDK in the API and the worker. **Since 2025-10-23, MinIO no longer publishes official Community Edition Docker images or binaries.** The project is in maintenance mode. Free rebuilds exist (for example, Chainguard's `cgr.dev/chainguard/minio`), and the last community tag is still on quay.io. So "just use `minio/minio:latest`" is no longer a safe default. Whichever server we pick, the SDK choice decides whether we can move to AWS S3 later without code changes.
+**Context:** The architecture diagram says "S3 or MinIO". We need an S3-compatible service in `nestjs-project/compose.yaml` for dev and tests, and an SDK in both the API and the worker. **Since October 2025, MinIO no longer publishes official Community Edition images or binaries**, and the project is in maintenance mode. Free rebuilds exist (for example, Chainguard's `cgr.dev/chainguard/minio`). As of 2026-11-02, the official `minio/minio` and `quay.io/minio/minio` images could no longer be pulled anonymously. So `minio/minio:latest` is no longer a safe default. Whichever server we pick, the SDK decides whether we can move to AWS S3 later without code changes.
 
 **Options:**
 
-### Option A: MinIO (pinned community release or Chainguard rebuild) + `@aws-sdk/client-s3` v3
-- MinIO runs in Compose with the image pinned to an exact tag. The code talks to it only through the AWS SDK v3 (`forcePathStyle: true`, custom `endpoint`) and `@aws-sdk/s3-request-presigner`.
-- **Pros:** MinIO is the most widely used S3 emulator: multipart, presign and Range all behave like AWS. It has a web console for debugging. Using the AWS SDK means production can be real S3 with only a config change.
-- **Cons:** The upstream image is frozen with no new security fixes, so we depend on a pinned tag or a third-party rebuild. MinIO's CORS handling differs from AWS (it is global rather than per-bucket `PutBucketCors`) and must be verified for browser uploads. MinIO's lifecycle rules do not support `AbortIncompleteMultipartUpload`.
+### Option A: MinIO (Chainguard rebuild, pinned) + `@aws-sdk/client-s3` v3
+- MinIO runs in Compose, pinned by digest. The code talks to it only through AWS SDK v3 (`forcePathStyle: true`, custom `endpoint`) and `@aws-sdk/s3-request-presigner`. A one-shot `minio-client` service creates the buckets.
+- **Pros:** The most widely used S3 emulator. Multipart, presign and Range GET behave like AWS. It has a web console for debugging. With the AWS SDK, moving to real S3 is only a config change. No external account is needed.
+- **Cons:** We depend on a third-party rebuild of a frozen upstream. MinIO's CORS handling differs from AWS (it is global, not per-bucket). Lifecycle rules do not support `AbortIncompleteMultipartUpload` (see TD-05).
 
 ### Option B: Garage (or another maintained S3-compatible server) + `@aws-sdk/client-s3` v3
-- Same SDK approach as A, but the Compose service is an actively maintained S3-compatible server such as Garage.
-- **Pros:** Maintained upstream with an official image. Same S3 API surface through the AWS SDK, so it stays portable to AWS S3.
-- **Cons:** Less complete S3 coverage than MinIO (some advanced APIs are missing). It needs more initial setup (layout/key creation commands). Fewer examples and community answers for the multipart + presign + CORS combination.
+- Same SDK approach, with an actively maintained server.
+- **Pros:** Maintained upstream with an official image. Still portable to AWS S3.
+- **Cons:** Less complete S3 coverage. More initial setup (layout and key creation). Fewer examples for the multipart + presign + CORS combination.
 
 ### Option C: MinIO + `minio` JS SDK
-- The `minio` npm client provides `presignedUrl`, multipart helpers and bucket admin calls.
-- **Pros:** The API is a bit simpler for MinIO-specific operations such as bucket policy and notifications.
-- **Cons:** It ties the code to a vendor whose server distribution has stalled. Docs and examples for moving to real AWS S3 are weaker. Its multipart presign support for per-part browser uploads is less direct than `UploadPartCommand` + `getSignedUrl`.
+- The `minio` npm client for presign, multipart and bucket admin.
+- **Pros:** Slightly simpler API for MinIO-only operations.
+- **Cons:** Ties the code to a vendor whose distribution has stalled. Weaker path to AWS S3. Per-part presigning is less direct than `UploadPartCommand` + `getSignedUrl`.
 
-**Recommendation:** **Option A**, with the SDK fixed as `@aws-sdk/client-s3` v3. MinIO's behavior is the closest to AWS for the exact features this phase depends on (multipart, per-part presigning, Range GETs). Pin the image to an exact tag, never `latest`. Because all code talks plain S3 through the AWS SDK, switching to Garage, SeaweedFS or real S3 later is only a Compose and env change. Choose B if you would rather not depend on a frozen image at all.
+**Recommendation:** **Option A.** MinIO is the closest to AWS for exactly the features this phase relies on (multipart, per-part presign, Range GET), and the AWS SDK keeps every line of code plain S3. Switching servers later is then only a Compose and env change. Pin the image by digest, never `latest`. Pick B if depending on a frozen upstream is unacceptable.
 
-**Decision:** A (MinIO + `@aws-sdk/client-s3` v3) — image `cgr.dev/chainguard/minio` (Chainguard rebuild, pulls without any account; official `minio/minio` and `quay.io/minio/minio` are no longer pullable anonymously, verified 2026-11-02), pinned by digest (`sha256:6adcdf68245544a8545bd9b4d2f0053ccf9fc41a74fc1437b6894b823350df64` at decision time); bucket init via `cgr.dev/chainguard/minio-client`. Constraint from the user: simple local setup, no external accounts.
+**Decision:** _[pending]_
 
 ---
 
@@ -60,28 +64,28 @@ _Subprojects in scope:_
 
 **Capability:** Transversal — covers: Serviço de armazenamento de arquivos (vídeos e thumbnails); Geração automática de thumbnail a partir de um frame do vídeo
 
-**Context:** Three components read or write the same objects: the API (presigning), the worker (reads originals, writes thumbnails), and the frontend (renders thumbnails, plays videos). Whether thumbnails get a stable public URL or a presigned, expiring one changes the frontend a lot. Expiring URLs break `next/image` caching and HTML caching, and they change what the API returns in every video-listing payload in Phases 04–07.
+**Context:** The API (presigning), the worker (reads originals, writes thumbnails) and, in later phases, the clients all touch the same objects. **API side of the contract:** the decision fixes what the API returns for a thumbnail in every video payload (a stable URL vs. a signed, expiring URL). Video listings from Phase 04 to Phase 07 inherit that shape. How a future frontend renders or caches it is not decided here.
 
 **Options:**
 
 ### Option A: Single private bucket, every read presigned
-- One bucket (`streamtube`) with prefixes (`videos/{videoId}/original`, `thumbnails/{videoId}.jpg`). Every read, thumbnails included, is a short-lived presigned GET issued by the API.
-- **Pros:** One bucket, one policy, and nothing is publicly readable.
-- **Cons:** Every listing payload must embed freshly signed thumbnail URLs, which is costly for grids. URLs change on every response, which defeats browser, CDN and `next/image` caching. URLs can expire inside long-lived pages.
+- One bucket with prefixes (`videos/{videoId}/original`, `thumbnails/{videoId}.jpg`). Every read, thumbnails included, is a short-lived presigned GET.
+- **Pros:** One bucket, one policy, nothing publicly readable.
+- **Cons:** Every listing payload must sign one URL per item. URLs change on every response, so no consumer can cache them, and they expire inside long-lived pages.
 
 ### Option B: Two buckets — private `videos`, public-read `thumbnails`
-- Originals live in a private bucket and are reached only through presigned URLs (see TD-12). Thumbnails live in a separate bucket with an anonymous-read policy. The API returns a stable URL, `{S3_PUBLIC_ENDPOINT}/thumbnails/{key}`.
-- **Pros:** Thumbnails can be cached and are compatible with `next/image` (`remotePatterns` for one host). Listing payloads stay simple. The access policy is obvious at the bucket level. Phase 04's custom thumbnail upload reuses the same bucket.
-- **Cons:** Two buckets to create and configure. Thumbnails of unlisted or not-yet-published videos are readable by anyone who knows the key, which is acceptable only if keys are not guessable (UUID-based).
+- Originals are reachable only through presigned URLs (TD-11). Thumbnails live in a bucket with an anonymous-read policy. The API returns a stable `thumbnailUrl` = `{S3_PUBLIC_ENDPOINT}/{thumbnails-bucket}/{key}`.
+- **Pros:** Stable, cacheable thumbnail URLs. Simple listing payloads. The access rule is visible at bucket level. Phase 04's custom thumbnail upload reuses the same bucket.
+- **Cons:** Two buckets to create and configure. Anyone who knows a thumbnail key can read it, which is acceptable only if keys are not guessable (internal UUID).
 
 ### Option C: Single bucket with a public-read policy on the `thumbnails/` prefix
-- Same idea as B, but with a prefix-scoped anonymous-read policy inside one bucket.
-- **Pros:** One bucket, with the same caching benefits as B.
-- **Cons:** A mistake in the policy can expose originals. Prefix-scoped policies are more fragile and are reviewed less clearly than a whole-bucket rule.
+- Same as B, using a prefix-scoped anonymous-read policy.
+- **Pros:** One bucket, same caching benefit.
+- **Cons:** A policy mistake can expose originals. Prefix policies are more fragile and harder to review than a whole-bucket rule.
 
-**Recommendation:** **Option B.** Thumbnails appear in every listing from Phase 04 to Phase 07, so stable, cacheable URLs matter more than having one bucket. Originals, which carry the real access-control needs, stay fully private. Object keys are built from the internal UUID primary key, not the public slug (TD-13), so public thumbnail URLs cannot be enumerated. Buckets are created by an idempotent init step in Compose (for example, an `mc`/CLI one-shot service). The exact mechanism is up to implementation.
+**Recommendation:** **Option B.** Thumbnails appear in every listing from Phase 04 onwards, so a stable URL in the API payload matters more than having a single bucket. Originals, which carry the real access rules, stay fully private. Object keys use the internal UUID, not the public ID (TD-12), so public thumbnail URLs cannot be enumerated. Buckets and policies are created by an idempotent init service in Compose.
 
-**Decision:** B (private `videos` bucket + public-read `thumbnails` bucket)
+**Decision:** _[pending]_
 
 ---
 
@@ -91,28 +95,28 @@ _Subprojects in scope:_
 
 **Capability:** Transversal — covers: Serviço de armazenamento de arquivos (vídeos e thumbnails); Upload de vídeos com suporte a arquivos de até 10GB sem impacto na performance; Reprodução via streaming (sem necessidade de download completo); Download do vídeo pelo usuário
 
-**Context:** The root CLAUDE.md requires Compose service names for traffic between containers. The API and worker therefore reach storage at `http://minio:9000`. But a SigV4 presigned URL **signs the host**. A URL signed for `minio:9000` cannot be opened by the browser, and rewriting the host afterwards invalidates the signature. This is a cross-component contract: the Joi schema, `.env.example`, `compose.yaml`, the S3 client factory, and the browser all depend on it. The bucket CORS config (allowed origin = the Next.js origin; `ExposeHeaders: ETag` is required so the browser can read part ETags) belongs to the same contract.
+**Context:** The root CLAUDE.md requires Compose service names for traffic between containers, so the API and worker reach storage at `http://minio:9000`. But a SigV4 presigned URL **signs the host**. A URL signed for `minio:9000` cannot be opened from the host machine (e2e running on the host, a browser later), and rewriting the host afterwards breaks the signature. **API side of the contract:** the Joi schema, `.env.example`, `compose.yaml`, the S3 client factory, and every presigned URL the API returns all depend on this. The storage CORS configuration (allowed origin, `ExposeHeaders: ETag` so a browser client can read part ETags) is storage configuration owned by this subproject's Compose. A future frontend only consumes it.
 
 **Options:**
 
 ### Option A: Dual endpoint — `S3_ENDPOINT` (internal) + `S3_PUBLIC_ENDPOINT` (client-facing)
 - Two `S3Client` instances. One does I/O against `S3_ENDPOINT=http://minio:9000`. The other is used **only for presigning** against `S3_PUBLIC_ENDPOINT=http://localhost:9000` (dev). Presigning is a local computation, so the signing client never needs to reach that host from inside the container.
-- **Pros:** Follows the service-name rule for container traffic and produces URLs the browser can open. Maps cleanly to production (internal VPC endpoint vs. public/CDN hostname). Explicit and testable.
+- **Pros:** Follows the service-name rule for container traffic and still produces URLs that clients outside Docker can open. Maps directly to production (internal VPC endpoint vs. public/CDN hostname). Explicit and testable.
 - **Cons:** Two clients and two keys to keep consistent. Developers must understand why they differ.
 
-### Option B: Single endpoint resolvable from both sides (`host.docker.internal:9000` everywhere)
-- Containers and the browser use the same hostname. Containers resolve it through `extra_hosts: host-gateway`. The browser resolves it only through a manual hosts-file entry on each developer machine.
+### Option B: Single endpoint resolvable from both sides (`host.docker.internal:9000`)
+- Containers resolve it via `extra_hosts: host-gateway`, and the host resolves it via a hosts-file entry.
 - **Pros:** One client, one key.
-- **Cons:** Breaks the "always use service names" rule in CLAUDE.md. Needs per-machine hosts-file setup. Container traffic loops through the host network.
+- **Cons:** Breaks the CLAUDE.md service-name rule. Needs per-machine hosts-file setup. Container traffic loops through the host network.
 
-### Option C: Proxy storage under the app origin (Next.js rewrite `/storage/* → minio`)
-- The browser only sees the Next.js origin, and storage is reverse-proxied behind it.
-- **Pros:** No CORS, and one public origin.
-- **Cons:** 10GB uploads and every video stream flow through the Next.js server, which defeats the "no performance impact" requirement. The `Host` header changes break SigV4 unless signing is done for the proxied host. It also adds a hop to all playback.
+### Option C: Reverse-proxy storage under the API origin
+- Storage is exposed under a path of the API's public origin, and URLs are signed for that host.
+- **Pros:** One public origin, no CORS.
+- **Cons:** 10GB uploads and every stream would cross a proxy in front of the API, which defeats the "no performance impact" requirement. `Host` header rewriting breaks SigV4 unless signing targets the proxied host.
 
-**Recommendation:** **Option A.** It is the only option that follows the CLAUDE.md networking rule and still produces browser-usable signed URLs. It also keeps bytes off both Node processes. The canonical new keys are `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `S3_REGION`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET_VIDEOS` and `S3_BUCKET_THUMBNAILS`. Final names are settled in planning, but the internal/public split is the decision. CORS allowed origin = the Next.js origin (`http://localhost:3001` in dev), with `ETag` exposed.
+**Recommendation:** **Option A.** It is the only option that follows the CLAUDE.md networking rule and still returns usable signed URLs, and it keeps bytes off the Node processes. Proposed canonical keys: `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `S3_REGION`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET_VIDEOS`, `S3_BUCKET_THUMBNAILS`, plus `REDIS_HOST`/`REDIS_PORT` for TD-06. Final names are fixed in planning. The internal/public split is the decision. The worker signs its ffprobe/ffmpeg input URLs with the **internal** client (TD-09), because it runs inside the Docker network.
 
-**Decision:** A (dual endpoint — `S3_ENDPOINT` internal + `S3_PUBLIC_ENDPOINT` for signing)
+**Decision:** _[pending]_
 
 ---
 
@@ -122,328 +126,338 @@ _Subprojects in scope:_
 
 **Capability:** Upload de vídeos com suporte a arquivos de até 10GB sem impacto na performance
 
-**Context:** A 10GB file must upload "without impact on performance", and project-plan §4 asks for the ability to **resume after a connection failure**. A single S3 `PutObject` is limited to **5GB**, so 10GB requires either S3 multipart or a server-side chunking protocol. Strict BFF (inherited) means anything that goes to NestJS also passes through a Next.js Route Handler. A protocol that sends bytes through NestJS would therefore send 10GB through **two** Node hops. The decision shapes both the API endpoints and the browser client.
+**Context:** A 10GB file must upload "without impact on performance", and project-plan §4 asks for resuming after a connection failure. A single S3 `PutObject` is limited to **5GB**, so 10GB needs S3 multipart or a server-side chunking protocol. **API side of the contract:** the decision defines the upload endpoints, their request/response shapes, and who talks to storage. In this phase the e2e suite acts as the client. Any future client (behind the strict BFF) only orchestrates these endpoints.
 
 **Options:**
 
 ### Option A: S3 Multipart Upload with per-part presigned URLs, orchestrated by the API
-- `initiate` (BFF → API): validates limits, creates the draft video, calls `CreateMultipartUpload`, and returns `uploadId` + part size. `sign-parts`: returns presigned `UploadPart` URLs. The browser PUTs parts **directly to storage** and collects ETags. `complete`: the API calls `CompleteMultipartUpload` and enqueues processing (TD-09). `abort` handles cancellation.
-- **Pros:** The API and BFF never touch the bytes. Each part retries independently. Resume uses `ListParts` with the same `uploadId`. Supports up to 10,000 parts and 5TB. Uploads run in parallel. Standard S3 semantics that are portable to AWS.
-- **Cons:** Several round-trips and more client logic (concurrency, ETag bookkeeping). Needs bucket CORS (TD-03) and cleanup of abandoned multipart uploads (TD-06).
+- `initiate`: validates limits (TD-05), creates the draft video (TD-13), calls `CreateMultipartUpload`, and returns `videoId`/`publicId`, `uploadId` and the part size. `sign-parts`: returns presigned `UploadPart` URLs for the requested part numbers. The client PUTs parts **directly to storage** and collects ETags. `complete`: the API calls `CompleteMultipartUpload` and enqueues processing (TD-08). `abort` cancels.
+- **Pros:** The API never touches the bytes. Each part retries on its own. Resume uses `ListParts` on the same `uploadId`. Up to 10,000 parts / 5TB. Parallel uploads. Standard S3 semantics.
+- **Cons:** Several control-plane round trips and more client logic (concurrency, ETag bookkeeping). Needs CORS (TD-03) and cleanup of abandoned uploads (TD-05).
 
-### Option B: tus protocol (`@tus/server` + `@tus/s3-store` in NestJS, `tus-js-client` in the browser)
-- An open resumable-upload protocol. The server receives chunks and streams them into S3 multipart.
-- **Pros:** Resume is built into the protocol. Mature clients exist.
-- **Cons:** Bytes flow browser → Next BFF → NestJS → storage. That is two Node hops for 10GB, which uses CPU, memory and bandwidth in the API and works against the core non-functional requirement. Proxying tus `PATCH`/`HEAD` semantics through a Route Handler is non-trivial. It also adds a protocol server to the API.
+### Option B: tus protocol in NestJS (`@tus/server` + `@tus/s3-store`)
+- An open resumable-upload protocol. The API receives chunks and streams them into S3 multipart.
+- **Pros:** Resume is part of the protocol. Mature clients exist.
+- **Cons:** All 10GB flow through NestJS (and later through the BFF too), using CPU, memory and bandwidth in the API. That works against the core non-functional requirement. Adds a protocol server to the API.
 
-### Option C: Streamed `multipart/form-data` through BFF → API → storage (`@aws-sdk/lib-storage` `Upload`)
-- One HTTP request per file. The API streams the body into an S3 multipart upload as it arrives.
-- **Pros:** The simplest client (`fetch` with `FormData`).
-- **Cons:** No resume. A dropped connection at 9.5GB restarts from zero. Same two-hop byte path as B. Long-lived requests hit proxy and body-size timeouts.
+### Option C: Streamed `multipart/form-data` into the API (`@aws-sdk/lib-storage` `Upload`)
+- One HTTP request per file. The API streams the body into S3 multipart as it arrives.
+- **Pros:** The simplest client.
+- **Cons:** No resume: a dropped connection at 9.5GB restarts from zero. Same byte path through Node as B. Long requests hit proxy and body-size timeouts.
 
-**Recommendation:** **Option A.** It is the only option where the 10GB payload bypasses both Node servers, and that is the literal requirement. It also gives resume (via `ListParts`) without a custom protocol server. The extra round-trips are small control-plane calls through the BFF. Depends on TD-03 (signing endpoint) and is detailed further by TD-05 (client) and TD-06 (limits/cleanup).
+**Recommendation:** **Option A.** It is the only option where the 10GB payload never touches a Node process, which is the literal requirement, and it gives resume through `ListParts` without a custom protocol server. The extra calls are small JSON requests. Depends on TD-03 (signing endpoint) and is detailed by TD-05 (limits and cleanup).
 
-**Decision:** A (S3 Multipart Upload with per-part presigned URLs, API-orchestrated)
-
----
-
-## TD-05: Browser Upload Client Implementation
-
-**Scope:** Frontend
-
-**Capability:** Upload de vídeos com suporte a arquivos de até 10GB sem impacto na performance
-
-**Context:** Depends on TD-04. The browser must slice the file, upload parts concurrently with progress, retry failed parts, and resume. Uppy 6's `@uppy/aws-s3` changed its model: the backend implements a single `signRequest`, and **Uppy itself performs `CreateMultipartUpload` and `CompleteMultipartUpload`** with presigned URLs. In that model the API does not observe completion unless the client also calls a separate "finalize" endpoint. With TD-04-A, the API instead performs `complete` server-side.
-
-**Options:**
-
-### Option A: Uppy (`@uppy/core` + `@uppy/aws-s3`, headless or with Dashboard UI)
-- `signRequest` calls a BFF route that asks the API to sign each S3 operation. An explicit `finalize` BFF call after `upload-success` lets the API verify (`HeadObject`) and enqueue processing.
-- **Pros:** Mature concurrency, retries, progress and pause/resume. The Golden Retriever plugin can resume across page reloads. Optional ready-made UI.
-- **Cons:** The client becomes authoritative for Create/Complete, so the API must sign those operations and then re-verify the result. That adds a `finalize` step and two sources of truth for completion. It also adds a heavy dependency and a UI that differs from the shadcn/Radix design system. MSW tests must cover the whole Uppy flow.
-
-### Option B: Small in-house uploader module (`fetch`/`XMLHttpRequest`, concurrency pool)
-- Roughly 200 lines of client code. It calls the BFF for `initiate`, `sign-parts` and `complete`, PUTs parts with XHR (for upload-progress events) through a fixed-size concurrency pool, retries parts with backoff, and keeps `{videoId, uploadId, completed parts}` in memory or `localStorage` for resume.
-- **Pros:** Keeps the API as the single authority for Create/Complete (matches TD-04-A exactly). No new dependency. The UI is built from existing design-system primitives. Every network call is a BFF route that MSW can stub through the generated `paths` types.
-- **Cons:** We own retry, abort and resume edge cases. Resuming across a page reload means re-selecting the file (browsers do not keep `File` handles), which Uppy also only partly solves.
-
-**Recommendation:** **Option B.** It keeps one authoritative completion path (API `complete` → enqueue) and avoids a sign-then-verify round trip. It also matches the inherited BFF + MSW + OpenAPI-typed testing setup and the shadcn design system. The logic is small and well bounded. Uppy is a reasonable choice if a richer upload UI (drag-and-drop dashboard, multiple files) becomes a requirement later.
-
-**Decision:** B (in-house uploader module)
+**Decision:** _[pending]_
 
 ---
 
-## TD-06: Upload Limits, Part Size and Abandoned-Upload Cleanup
+## TD-05: Upload Limits, Part Size and Abandoned-Upload Cleanup
 
 **Scope:** Cross-layer
 
 **Capability:** Transversal — covers: Upload de vídeos com suporte a arquivos de até 10GB sem impacto na performance; Pré-cadastro automático do vídeo como rascunho ao iniciar o upload
 
-**Context:** The draft is created at `initiate` (capability). Users close tabs, so some drafts never complete, and they leave both a DB row and an incomplete multipart upload holding storage. Limits must be enforced consistently by the API (`initiate` DTO), the client (file picker, part slicing) and storage. S3 constraints: parts must be 5 MiB–5 GiB (except the last) and at most 10,000 per upload. **MinIO lifecycle rules do not support `AbortIncompleteMultipartUpload`.** MinIO purges stale multipart uploads on its own internal schedule (reported as about 24h), while AWS S3 needs a lifecycle rule. Neither cleans the DB draft.
+**Context:** The draft is created at `initiate` (capability). Clients drop out, so some drafts never complete and leave a DB row plus an incomplete multipart upload holding storage. S3 constraints: parts of 5 MiB–5 GiB (except the last), at most 10,000 per upload. **MinIO lifecycle rules do not support `AbortIncompleteMultipartUpload`.** MinIO purges stale uploads on an internal schedule, and AWS needs a lifecycle rule. Neither cleans the DB draft. **API side of the contract:** the limits are enforced by the `initiate` DTO and returned to the client (part size), so any future client must follow what the API dictates.
 
 **Options:**
 
 ### Option A: Server-dictated limits + application-level cleanup job
-- `initiate` validates `size ≤ 10 GiB` and the MIME/extension allowlist (aligned with TD-11), and returns a **server-chosen part size** (for example, 64–100 MiB, giving about 100–160 parts at 10GB). A repeatable job on the TD-07 queue runs periodically. It finds drafts still in `uploading` older than a threshold (for example, 24h), calls `AbortMultipartUpload`, and deletes or marks the draft.
-- **Pros:** Portable across MinIO and S3. Cleans **both** storage and DB together. The client cannot pick an unsafe part size.
+- `initiate` validates `size ≤ 10 GiB` and a MIME/extension allowlist (aligned with TD-10's playability gate), and returns a **server-chosen part size** (for example, 64 MiB → 160 parts at 10 GiB). A scheduled job on the TD-06 queue (BullMQ Job Scheduler, `upsertJobScheduler`) finds drafts still `uploading` past a threshold (for example, 24h), calls `AbortMultipartUpload`, and removes or fails the draft.
+- **Pros:** Same behavior on MinIO and S3. Cleans storage **and** DB together. The client cannot pick an unsafe part size.
 - **Cons:** One more scheduled job to write and test.
 
 ### Option B: Server-dictated limits + storage-native expiry only
-- Same limits as A. Incomplete uploads are left to the storage engine (MinIO's internal stale-upload purge, or an S3 lifecycle rule in production). Orphan drafts are hidden from owner listings by a staleness filter.
+- Same limits. Incomplete uploads are left to the storage engine, and orphan drafts are hidden by a staleness filter.
 - **Pros:** No cleanup code.
-- **Cons:** Behavior differs by backend (MinIO's purge is undocumented, and its lifecycle rule is unsupported). Orphan DB rows build up forever. Tests cannot reliably check the cleanup.
+- **Cons:** Behavior differs by backend (MinIO's purge is undocumented, and its lifecycle rule is unsupported). Orphan rows build up forever. Cleanup cannot be tested reliably.
 
-### Option C: Client-chosen part size, user-triggered cancel only
-- The client picks the part size and calls `abort` on cancel. There is no background cleanup.
+### Option C: Client-chosen part size, explicit `abort` only
+- The client picks the part size and calls `abort` on cancel. No background cleanup.
 - **Pros:** Simplest.
-- **Cons:** Tab closes and crashes leak storage and drafts permanently. The server cannot defend the 10,000-part or minimum-size limits.
+- **Cons:** Crashes and closed tabs leak storage and drafts permanently. The server cannot defend the 10,000-part or minimum-size limits.
 
-**Recommendation:** **Option A.** It is the only option where cleanup behaves the same on MinIO and S3, and the only one that also cleans the draft row created by the capability. The cleanup job reuses the queue from TD-07 (repeatable job), so it adds no new infrastructure. Exact thresholds (part size, staleness window, allowlist) are policy parameters to fix during planning.
+**Recommendation:** **Option A.** It is the only option where cleanup behaves the same on MinIO and S3, and the only one that also cleans the draft row the capability creates. The cleanup reuses the TD-06 queue through a Job Scheduler, so it adds no infrastructure. Thresholds are policy parameters. Suggested values for planning: 64 MiB parts, 10 GiB max, 24h staleness window, allowlist matching TD-10.
 
-**Decision:** A (server-dictated limits + application-level cleanup job on the queue)
+**Decision:** _[pending]_
 
 ---
 
-## TD-07: Background Job Queue
+## TD-06: Background Job Queue
 
 **Scope:** Backend
 
 **Capability:** Serviço de processamento em segundo plano (filas)
 
-**Context:** The architecture diagram leaves "Message Queue — TBD". Processing (ffprobe and thumbnail generation for files up to 10GB) must run outside the request cycle with retries and idempotency. The decision adds (or does not add) a new infrastructure service to Compose, and it picks the NestJS integration that both the API (producer) and worker (consumer) use.
+**Context:** The architecture diagram still says "Message Queue — TBD". Processing (ffprobe and thumbnail for files up to 10GB) must run outside the request cycle, with retries and idempotency. The choice adds (or not) an infrastructure service to Compose, and it picks the Nest integration used by the API (producer) and the worker (consumer).
 
 **Options:**
 
 ### Option A: BullMQ + Redis (`@nestjs/bullmq`)
-- Redis-backed queue. The official Nest module provides `BullModule.forRootAsync` / `registerQueue`, `@Processor` + `WorkerHost`, and `defaultJobOptions` (`attempts`, `backoff`).
-- **Pros:** First-party Nest integration. Retries with exponential backoff, deduplication by custom `jobId` (`jobId = videoId` makes enqueue idempotent), repeatable jobs (used by TD-06 cleanup), concurrency control, stalled-job recovery. Very widely used.
-- **Cons:** Adds Redis to Compose and to the test environment. Redis must be configured for queue durability (`maxmemory-policy noeviction`, persistence).
+- A Redis-backed queue. The official Nest module provides `BullModule.forRootAsync`/`registerQueue`, `@Processor` + `WorkerHost`, and default job options (`attempts`, `backoff`).
+- **Pros:** First-party Nest integration. Exponential backoff retries, dedup by custom `jobId` (`jobId = videoId` makes enqueueing idempotent), Job Schedulers (TD-05 cleanup), concurrency control, stalled-job recovery.
+- **Cons:** Adds Redis to Compose and to the test environment. Redis must be configured for queue durability (`maxmemory-policy noeviction`, persistence). A retained job with the same `jobId` blocks re-adding, so the retention options must allow reprocessing.
 
 ### Option B: pg-boss (PostgreSQL-backed)
-- Job queue stored in Postgres tables, using `SKIP LOCKED`.
-- **Pros:** No new infrastructure, because Postgres already exists. Jobs can be enqueued in the **same transaction** as the video row (transactional outbox for free).
-- **Cons:** No official Nest module (community wrappers or a hand-written provider). Queue load lands on the primary database. The architecture diagram models the queue as a separate container. Smaller ecosystem.
+- A job queue in Postgres tables using `SKIP LOCKED`.
+- **Pros:** No new infrastructure. Jobs can be enqueued in the **same transaction** as the video row.
+- **Cons:** No official Nest module. Queue load lands on the primary DB. The diagram models the queue as a separate container. Smaller ecosystem.
 
 ### Option C: RabbitMQ (`@nestjs/microservices` RMQ transport or `amqplib`)
-- AMQP broker with acks and dead-letter exchanges.
-- **Pros:** A real message broker with strong delivery semantics. Suits multi-language consumers.
-- **Cons:** Heavier to operate. Nest's RMQ transport is built for RPC/event patterns, not job semantics. Retry/backoff and scheduled jobs need DLX/TTL plumbing. It is more than this phase needs.
+- An AMQP broker with acks and dead-letter exchanges.
+- **Pros:** A real broker with strong delivery semantics, and it suits consumers in other languages.
+- **Cons:** Heavier to operate. Nest's RMQ transport targets RPC/events, not jobs. Retry/backoff and scheduled jobs need DLX/TTL plumbing.
 
-**Recommendation:** **Option A.** It matches the diagram's separate queue container, has the only first-party Nest integration of the three, and provides out of the box what TD-14 (retry/backoff, idempotent `jobId`) and TD-06 (repeatable cleanup) need. Redis is a small, well-understood addition. pg-boss is the strongest alternative if avoiding new infrastructure becomes a priority.
+**Recommendation:** **Option A.** It matches the diagram's separate queue container, has the only first-party Nest integration of the three, and gives TD-13 (retries, idempotent `jobId`) and TD-05 (scheduled cleanup) what they need out of the box. pg-boss is the strongest alternative if avoiding new infrastructure becomes a priority.
 
-**Decision:** A (BullMQ + Redis via `@nestjs/bullmq`)
+**Decision:** _[pending]_
 
 ---
 
-## TD-08: Video Worker Deployment Topology
+## TD-07: Video Worker Deployment Topology
 
 **Scope:** Backend
 
 **Capability:** Transversal — covers: Serviço de processamento em segundo plano (filas); Processamento automático do vídeo após upload (extração de duração e metadados); Geração automática de thumbnail a partir de um frame do vídeo
 
-**Context:** The architecture diagram has a separate "Video Worker (FFmpeg)" container. Processing is CPU- and IO-heavy and must not degrade API latency. The worker needs FFmpeg installed and access to DB, storage and queue. It shares the `Video` entity and config with the API.
+**Context:** The diagram has a separate "Video Worker (FFmpeg)" container. Processing is CPU- and IO-heavy and must not slow down the API. The worker needs FFmpeg plus access to DB, storage and queue, and it shares the `Video` entity and config with the API.
 
 **Options:**
 
 ### Option A: Separate container, same codebase, second entrypoint
-- A `src/worker.ts` bootstraps `NestFactory.createApplicationContext(WorkerModule)` (no HTTP server). It runs in its own Compose service from the same project, with FFmpeg added to its image. The API registers only the producer side.
-- **Pros:** Matches the diagram. Isolates CPU load and scales independently. Reuses entities, config (TD-01 namespaces) and TypeORM setup with no duplication. One `package.json` and one test suite.
-- **Cons:** Two processes to start in dev. Module wiring must keep the processor out of the API's module graph.
+- `src/worker.ts` bootstraps `NestFactory.createApplicationContext(WorkerModule)` with no HTTP server. It runs as its own Compose service from the same project, with FFmpeg in its image. The API registers only the producer side.
+- **Pros:** Matches the diagram. Isolates CPU load and scales on its own. Reuses entities, config namespaces and the TypeORM setup. One `package.json`, one test suite.
+- **Cons:** Two processes in dev. Module wiring must keep the processor out of the API's module graph.
 
 ### Option B: In-process processor inside the API
-- `@Processor` registered in the API application itself.
-- **Pros:** Simplest setup, one process.
-- **Cons:** FFmpeg work competes with HTTP handling, which goes against "without impact on performance". The API image needs FFmpeg. Contradicts the architecture diagram.
+- `@Processor` registered in the API application.
+- **Pros:** Simplest setup.
+- **Cons:** FFmpeg competes with HTTP handling, which goes against "without impact on performance". The API image needs FFmpeg. Contradicts the diagram.
 
 ### Option C: Separate subproject (`video-worker/`)
-- An independent package with its own manifest, Dockerfile and config.
-- **Pros:** Maximum isolation, and a different runtime is possible.
-- **Cons:** Duplicates entity definitions, config validation and DB setup, or forces a shared-package/monorepo-tooling decision this phase does not need.
+- An independent package with its own manifest and config.
+- **Pros:** Maximum isolation.
+- **Cons:** Duplicates entities, config validation and DB setup, or forces a monorepo/shared-package decision this phase does not need.
 
-**Recommendation:** **Option A.** It gives the isolation the diagram and the NFR ask for without duplicating the domain model. A second entrypoint in the same NestJS project is the idiomatic way to run standalone workers (`createApplicationContext`).
+**Recommendation:** **Option A.** It gives the isolation the diagram and the requirement ask for without duplicating the domain model. `createApplicationContext` is the idiomatic NestJS way to run a standalone worker.
 
-**Decision:** A (separate container, same codebase, second entrypoint)
+**Decision:** _[pending]_
 
 ---
 
-## TD-09: Processing Trigger
+## TD-08: Processing Trigger
 
 **Scope:** Backend
 
 **Capability:** Processamento automático do vídeo após upload (extração de duração e metadados)
 
-**Context:** Depends on TD-04 and TD-07. Something must move a video from "uploaded" to "queued for processing". The trigger can come from our API (it knows when `complete` succeeds) or from the storage engine (object-created events).
+**Context:** Depends on TD-04 and TD-06. Something must move a video from "uploaded" to "queued for processing". The trigger can be our API (it knows when `complete` succeeds) or the storage engine (object-created events).
 
 **Options:**
 
 ### Option A: API enqueues on `complete`
-- After `CompleteMultipartUpload` succeeds, the API updates the status (TD-14) and adds the job with `jobId = videoId`.
-- **Pros:** One explicit, easy-to-test code path. Works the same on any S3-compatible backend. The ownership check and status transition happen in the same request. Idempotent through `jobId`.
-- **Cons:** If the process crashes between the DB update and the enqueue, the video can stay in a non-processing state. This is mitigated by the idempotent re-enqueue on retried `complete` and by TD-06's sweeper.
+- After `CompleteMultipartUpload` succeeds, the API updates the status (TD-13) and adds the job with `jobId = videoId`.
+- **Pros:** One explicit, testable code path. Works the same on any S3-compatible backend. The ownership check and the status change happen in the same request. Idempotent through `jobId`.
+- **Cons:** A crash between the DB update and the enqueue can leave the video stuck. This is mitigated by an idempotent re-enqueue on a retried `complete` and by a sweep of stuck videos in the TD-05 scheduled job.
 
 ### Option B: Storage bucket event notifications
-- MinIO or S3 publishes `s3:ObjectCreated:CompleteMultipartUpload` to a target (webhook into the API, a Redis list, or SQS in AWS), and a consumer enqueues the job.
-- **Pros:** Triggers even if the client never calls `complete` (only relevant with client-side completion).
-- **Cons:** Notification targets are configured differently on MinIO and AWS. Adds a webhook endpoint or a second consumer. Hard to test deterministically. Redundant under TD-04-A, where the API already performs completion.
+- MinIO/S3 publishes `s3:ObjectCreated:CompleteMultipartUpload` to a target (webhook, Redis, SQS), and a consumer enqueues the job.
+- **Pros:** Triggers even if no one calls `complete` (relevant only with client-side completion).
+- **Cons:** Targets are configured differently on MinIO and AWS. Adds a webhook or a second consumer. Hard to test deterministically. Redundant under TD-04-A.
 
-**Recommendation:** **Option A.** Under TD-04-A the API is already the party that completes the upload, so enqueueing there is the simplest correct trigger and does not couple to storage-specific notification setup.
+**Recommendation:** **Option A.** Under TD-04-A the API already completes the upload, so enqueueing there is the simplest correct trigger and does not couple the code to storage-specific notification setup.
 
-**Decision:** A (API enqueues on `complete`)
+**Decision:** _[pending]_
 
 ---
 
-## TD-10: Media Inspection Tooling and Input Access
+## TD-09: Media Inspection Tooling and Input Access
 
 **Scope:** Backend
 
 **Capability:** Transversal — covers: Processamento automático do vídeo após upload (extração de duração e metadados); Geração automática de thumbnail a partir de um frame do vídeo
 
-**Context:** The worker must extract duration and metadata (ffprobe) and grab one frame for the thumbnail (ffmpeg). Two sub-choices are linked: **how** we call FFmpeg from Node, and **how** the worker reads a file of up to 10GB. Note: `fluent-ffmpeg`, the historical default wrapper, is **deprecated on npm and unmaintained**.
+**Context:** The worker must extract duration and metadata (ffprobe) and grab one frame for the thumbnail (ffmpeg). Two linked sub-choices: **how** to call FFmpeg from Node, and **how** to read a file of up to 10GB. Note: `fluent-ffmpeg`, the historical wrapper, is **deprecated on npm and unmaintained**.
 
 **Options:**
 
 ### Option A: Direct `ffprobe`/`ffmpeg` CLI via `child_process.spawn`, input over presigned HTTP URL
-- The worker image installs FFmpeg from the distro. The worker runs `ffprobe -print_format json -show_format -show_streams <presigned-url>` and `ffmpeg -ss <t> -i <presigned-url> -frames:v 1 ...`. FFmpeg reads over HTTP with Range requests, fetching only the bytes it needs.
-- **Pros:** No deprecated wrapper, and the JSON output is parsed into typed DTOs. **No 10GB download**: probing and single-frame seeks read only headers plus a small range. Worker disk usage stays near zero.
-- **Cons:** We write a thin typed wrapper (argument building, exit-code and stderr handling). MP4s with the `moov` atom at the end need an extra Range request (handled by FFmpeg).
+- The worker image installs FFmpeg from the distro. The worker runs `ffprobe -print_format json -show_format -show_streams <url>` and `ffmpeg -ss <t> -i <url> -frames:v 1 ...`, where `<url>` is presigned with the internal client (TD-03). FFmpeg uses HTTP Range and fetches only what it needs.
+- **Pros:** No deprecated wrapper. The JSON output is parsed into typed DTOs. **No 10GB download**: probing and a single-frame seek read only headers and a small range. Worker disk stays near zero.
+- **Cons:** We write a thin typed wrapper (arguments, exit codes, stderr). MP4s with `moov` at the end need an extra range read (FFmpeg handles it).
 
-### Option B: Direct CLI, but download the original to a temp volume first
-- The object is streamed to local disk, then FFmpeg runs on the file.
-- **Pros:** Local file I/O is the most predictable for FFmpeg. Easy to reproduce locally.
-- **Cons:** Up to 10GB of disk and transfer per job, mostly wasted for probe + one frame. Needs temp-volume sizing and cleanup. Slower, and limits worker concurrency.
+### Option B: Direct CLI on a local copy of the original
+- Stream the object to a temp volume, then run FFmpeg on the file.
+- **Pros:** Local file I/O is the most predictable for FFmpeg.
+- **Cons:** Up to 10GB of disk and transfer per job, mostly wasted for a probe and one frame. Temp-volume sizing and cleanup. Slower, and limits concurrency.
 
-### Option C: `fluent-ffmpeg` wrapper (with either input mode)
-- A fluent API over the FFmpeg CLI.
-- **Pros:** Familiar API and many examples.
-- **Cons:** Deprecated and unmaintained, so it adds dependency risk for no real gain on two simple commands.
+### Option C: `fluent-ffmpeg` wrapper
+- A fluent API over the CLI.
+- **Pros:** Familiar, many examples.
+- **Cons:** Deprecated and unmaintained, which adds dependency risk for two simple commands.
 
-**Recommendation:** **Option A.** Probing and single-frame extraction never need the full file, so reading over HTTP Range from a presigned URL (signed with the **internal** endpoint client from TD-03, because the worker is inside the Docker network) avoids moving 10GB per job. Calling the CLI directly avoids a deprecated dependency. Thumbnail frame policy (for example, a frame at about 10% of duration, clamped for very short videos) is a parameter for planning.
+**Recommendation:** **Option A.** Probing and single-frame extraction never need the full file, so reading over HTTP Range avoids moving 10GB per job, and calling the CLI directly avoids a deprecated dependency. Frame policy is a planning parameter. Suggested: a frame at about 10% of the duration, clamped for very short videos.
 
-**Decision:** A (direct ffprobe/ffmpeg CLI via `child_process`, input over presigned HTTP URL)
+**Decision:** _[pending]_
 
 ---
 
-## TD-11: Streaming Format and Browser Playability
+## TD-10: Streaming Format and Playability
 
 **Scope:** Cross-layer
 
 **Capability:** Reprodução via streaming (sem necessidade de download completo)
 
-**Context:** "Streaming without full download" can mean progressive HTTP playback (Range requests on one file) or adaptive streaming (HLS/DASH segments). This decides what the worker produces, what storage holds, and what the Phase 05 player must support. This phase's capabilities define processing as **metadata extraction + thumbnail**. Transcoding is not listed. But an uploaded MKV or HEVC file will not play in most browsers.
+**Context:** "Streaming without full download" can mean progressive HTTP playback (Range requests on one file) or adaptive streaming (HLS/DASH segments). This decides what the worker produces and what storage holds. **API side of the contract:** what the stream URL (TD-11) points to and which uploads the API accepts. The phase's processing capabilities are **metadata + thumbnail only**. Transcoding is not listed, but an MKV/HEVC original will not play in most browsers.
 
 **Options:**
 
 ### Option A: Progressive playback of the original + playability gate
-- The original is served as-is with HTTP Range (native `<video>` support). `initiate` restricts uploads to browser-oriented containers (for example, `video/mp4`, `video/webm`). The worker's ffprobe step checks the codecs (H.264/VP9/AV1 video, AAC/Opus audio). Anything not browser-playable ends as `failed` with a clear reason (TD-14).
-- **Pros:** No transcoding cost and no extra storage. Fits the phase's stated processing scope exactly. The player is a plain `<video src>`.
-- **Cons:** No adaptive bitrate, so a 4K original is streamed at 4K. Users with other formats must convert before uploading.
+- The original is served as-is with HTTP Range (storage returns `206`). `initiate` restricts uploads to browser-oriented containers (for example, `video/mp4`, `video/webm`). The worker's ffprobe step checks the codecs (for example, H.264/VP9/AV1 video, AAC/Opus audio). Anything not playable ends as `failed` with a reason (TD-13).
+- **Pros:** No transcoding, no extra storage. Fits the phase's processing scope exactly. Any future player is a plain `<video src>`.
+- **Cons:** No adaptive bitrate (a 4K original streams at 4K). Users with other formats must convert before uploading.
 
 ### Option B: Normalize to a "faststart" H.264/AAC MP4
-- The worker always produces a web-optimized MP4. It remuxes with `-c copy -movflags +faststart` when the codecs are already compatible, and transcodes otherwise.
-- **Pros:** Accepts nearly any input. Instant start (moov atom at the front). Still a plain `<video>` player.
-- **Cons:** Full transcoding of 10GB inputs is CPU-heavy (minutes to hours). Doubles storage unless the original is deleted. Goes beyond this phase's stated processing capabilities.
+- The worker always produces a web-optimized MP4: a remux (`-c copy -movflags +faststart`) when the codecs fit, a transcode otherwise.
+- **Pros:** Accepts almost any input. Fast start.
+- **Cons:** Transcoding 10GB inputs is CPU-heavy (minutes to hours). Doubles storage unless the original is deleted. Goes beyond the phase's processing scope.
 
 ### Option C: HLS adaptive streaming (multi-rendition transcode)
-- The worker produces an HLS ladder (for example, 360p/720p/1080p) plus a playlist.
-- **Pros:** YouTube-like adaptive quality and the best bandwidth behavior.
-- **Cons:** Heaviest compute and storage cost by far. The player needs `hls.js` (Phase 05). Download (a separate capability) still needs the original. Clearly beyond the phase's scope.
+- The worker produces an HLS ladder plus a playlist.
+- **Pros:** YouTube-like adaptive quality.
+- **Cons:** By far the heaviest compute and storage cost. Download (a separate capability) still needs the original. Clearly outside this phase.
 
-**Recommendation:** **Option A.** It meets "streaming without full download" with zero transcoding and stays inside the phase's processing scope (duration, metadata, thumbnail). The ffprobe codec gate turns "won't play" into an explicit failure instead of a broken player. B is the natural next step if input-format coverage becomes a product requirement. It extends the same worker without changing the delivery contract (TD-12).
+**Recommendation:** **Option A.** It meets "streaming without full download" with zero transcoding and stays inside the phase's scope (duration, metadata, thumbnail). The codec gate turns "won't play" into an explicit `failed` state. B is the natural next step if format coverage becomes a requirement, and it would not change the delivery contract (TD-11).
 
-**Decision:** A (progressive playback of the original + ffprobe playability gate)
+**Decision:** _[pending]_
 
 ---
 
-## TD-12: Streaming and Download Delivery Path
+## TD-11: Streaming and Download Delivery Endpoint Contract
 
 **Scope:** Cross-layer
 
 **Capability:** Transversal — covers: Reprodução via streaming (sem necessidade de download completo); Download do vídeo pelo usuário
 
-**Context:** The video bytes must reach the browser with Range support (streaming) and with `Content-Disposition: attachment` (download). Authorization still applies: non-`ready` videos are visible only to their owner (unlisted/visibility is Phase 04). Strict BFF means any URL served by the app goes through a Route Handler. The architecture diagram already shows "Frontend → Object Storage: Streams".
+**Context:** The bytes must reach the client with Range support (streaming) and with `Content-Disposition: attachment` (download), and access must be checked first (TD-14). The diagram shows "Frontend → Object Storage: Streams". **API side of the contract:** this TD fixes how the NestJS API hands out playback/download access. Under the inherited strict BFF, a future frontend reaches these endpoints only through a Route Handler. How that handler exposes them to the browser (pass-through JSON, its own 302, etc.) belongs to the frontend phase and is not decided here.
 
 **Options:**
 
-### Option A: API returns a presigned GET URL in the video payload
-- The BFF fetches video details. The API checks access and includes a presigned `streamUrl` (and, on demand, a `downloadUrl` signed with `ResponseContentDisposition=attachment; filename=...`). `<video src>` points straight at storage.
-- **Pros:** No bytes through Node. Storage handles Range/206 natively. Simple.
-- **Cons:** Signed URLs leak into RSC payloads and HTML, and they expire. A long-open page, or playback longer than the expiry, starts failing new Range requests. The FE must re-fetch to refresh them.
+### Option A: Presigned URLs embedded in the video detail payload
+- `GET /videos/:publicId` includes `streamUrl` (and `downloadUrl`, signed with `ResponseContentDisposition=attachment; filename=...`) when the caller has access.
+- **Pros:** No bytes through Node. Storage handles Range/206. One call.
+- **Cons:** Every detail read signs URLs, even when nobody plays the video. Signed URLs become part of a general-purpose (and later cacheable) payload and expire inside it.
 
-### Option B: API proxy endpoint that forwards `Range` → `GetObject` → `206`
-- `GET /videos/:id/stream` streams bytes from storage through NestJS. Under strict BFF it is also proxied by a Next Route Handler.
+### Option B: API proxy endpoint (`Range` → `GetObject` → `206`)
+- `GET /videos/:publicId/stream` streams bytes from storage through NestJS.
 - **Pros:** Full control: per-request auth, analytics, no signed URLs exposed.
-- **Cons:** Every byte of every view crosses **two** Node processes, which is the worst case for performance and directly conflicts with the NFR and the diagram.
+- **Cons:** Every byte of every view crosses NestJS (and later the BFF too). That is the worst case for performance and conflicts with the requirement and the diagram.
 
-### Option C: Stable BFF URL that issues a 302 redirect to a freshly presigned URL
-- `next-frontend` exposes `/api/videos/{publicId}/stream` and `/api/videos/{publicId}/download`. Each Route Handler asks the API, which checks access and signs, then responds `302 Location: <presigned URL>` (the download variant uses `ResponseContentDisposition=attachment`). The browser then streams directly from storage.
-- **Pros:** Stable, cacheable-in-HTML URLs (`<video src="/api/videos/abc/stream">`, `<a href=".../download">`). Access is checked on every load, and a fresh signature is issued each time, so expiry can be short. Bytes never touch Node. Keeps the strict-BFF contract (the browser only knows same-origin URLs plus wherever storage redirects).
-- **Cons:** One extra redirect hop per load. Media elements keep the redirected URL for subsequent Range requests, so the expiry must still cover a viewing session (for example, a few hours).
+### Option C: Dedicated signing endpoints returning JSON
+- `GET /videos/:publicId/stream-url` and `GET /videos/:publicId/download-url` check access and return `{ url, expiresAt }`, freshly presigned with the public client (TD-03). The download variant sets `ResponseContentDisposition=attachment`.
+- **Pros:** No bytes through Node. Signing happens only on demand, with a short expiry. Explicit, typed OpenAPI responses. Fits the strict BFF: the BFF can relay the JSON or turn it into its own stable-URL 302 later, without API changes. Easy to e2e (get URL → Range GET to MinIO → `206`).
+- **Cons:** One extra call before playback. The expiry must still cover a viewing session, because media elements reuse the URL for later Range requests.
 
-**Recommendation:** **Option C.** It keeps the diagram's "frontend streams from storage" property and the NFR (no bytes through Node), like A. It also gives the frontend stable, same-origin URLs for streaming and download, with an authorization check on every access. That is a better fit for the strict-BFF contract and for Phase 05's player and download button. The presigned URL is signed with the public endpoint client (TD-03).
+### Option D: API endpoint that answers `302` to a freshly presigned URL
+- `GET /videos/:publicId/stream` and `/download` check access and respond `302 Location: <presigned URL>`.
+- **Pros:** No bytes through Node. A stable endpoint URL.
+- **Cons:** The API needs a bearer token, which a `<video src>` cannot send, so a BFF must sit in front anyway and handle the redirect manually (`fetch` follows redirects by default). Redirects are less natural to describe in OpenAPI.
 
-**Decision:** C (stable BFF URL → 302 to freshly presigned URL)
+**Recommendation:** **Option C.** It keeps the bytes off Node like A and D, but signs only when playback or download is requested, and its typed JSON response is the easiest contract for a future BFF to build on, whether that BFF passes the URL through or issues its own stable 302. D is equivalent on performance. Pick it if you want the redirect contract fixed in the API now.
+
+**Decision:** _[pending]_
 
 ---
 
-## TD-13: Unique Public Video Identifier (URL ID)
+## TD-12: Unique Public Video Identifier (URL ID)
 
 **Scope:** Cross-layer
 
 **Capability:** URL única por vídeo, sem conflito com outros vídeos
 
-**Context:** Each video needs a short, unique, never-conflicting public identifier for URLs (`/watch/{id}`), used by API routes, BFF routes, FE pages, and links shared outside the app. Phase 04 adds **unlisted** videos ("accessible only via direct link"). This makes **unguessability** a hard requirement, because any scheme that can be enumerated or decoded leaks unlisted videos. The internal primary key is a separate concern.
+**Context:** Each video needs a short, unique, never-conflicting public ID for its URLs, used by API routes now and by frontend routes and shared links later. Phase 04 adds **unlisted** videos ("only via link"), so **unguessability** is a hard requirement: any scheme that can be enumerated or decoded leaks unlisted videos. **API side of the contract:** the `:publicId` route parameter and the `publicId` field in payloads. The internal primary key is a separate concern.
 
 **Options:**
 
-### Option A: Random short ID (11 chars, URL-safe alphabet) + `UNIQUE` constraint + retry on collision
-- The ID is generated at `initiate` from a CSPRNG (`node:crypto` `randomBytes` → base62/base64url, or the `nanoid` library) and stored in a `public_id` column with a unique index. On the very unlikely collision, insert is retried. The internal PK stays a UUID.
-- **Pros:** Short, YouTube-like URLs (64^11 ≈ 7×10^19 space). Not enumerable, so it is safe for unlisted videos. The DB constraint guarantees no conflicts regardless of probability.
-- **Cons:** One extra indexed column and a retry loop. Note: `nanoid` v5 is ESM-only, which causes friction with the project's CommonJS + ts-jest setup. A ~10-line `node:crypto` generator avoids that dependency.
+### Option A: Random short ID (11 chars, URL-safe) + `UNIQUE` constraint + retry on collision
+- Generated at `initiate` from a CSPRNG (`node:crypto` → base64url/base62, or `nanoid`) and stored in a `public_id` column with a unique index. A collision triggers a retry. The internal PK stays a UUID.
+- **Pros:** Short, YouTube-like URLs (64^11 ≈ 7×10^19). Not enumerable, so safe for unlisted videos. The DB constraint guarantees no conflicts regardless of probability.
+- **Cons:** An extra indexed column and a retry loop. `nanoid` v5 is ESM-only, which clashes with the CommonJS + ts-jest setup. A ~10-line `node:crypto` generator avoids that.
 
-### Option B: Encoded sequential ID (Sqids/Hashids over a serial column)
+### Option B: Encoded sequential ID (Sqids/Hashids)
 - The integer PK is encoded into a short string.
-- **Pros:** Collisions are impossible by construction. Very short IDs.
-- **Cons:** It is an encoding, not encryption. IDs can be decoded and enumerated, so it **fails the unlisted-video requirement** of Phase 04. It also exposes upload volume.
+- **Pros:** No collisions by construction. Very short.
+- **Cons:** An encoding, not encryption. IDs can be decoded and enumerated, which **fails Phase 04's unlisted requirement**, and they expose upload volume.
 
 ### Option C: UUID in the URL
-- Reuse the UUID PK directly as the public ID.
-- **Pros:** Zero extra machinery. Unguessable (v4).
-- **Cons:** 36-character URLs, far from the "short URL" goal in project-plan §4. Couples the public URL to the internal PK forever.
+- The UUID PK is the public ID.
+- **Pros:** No extra machinery. Unguessable (v4).
+- **Cons:** 36-character URLs, far from the short-URL goal in project-plan §4. Ties public URLs to the internal PK forever.
 
-**Recommendation:** **Option A**, generated with `node:crypto` (no dependency, no ESM/Jest friction). It is the only option that is short, unguessable for Phase 04's unlisted videos, and guaranteed conflict-free by the DB `UNIQUE` constraint, which is the literal capability. Storage object keys use the internal UUID (TD-02), so the public ID can be rotated later without moving objects.
+**Recommendation:** **Option A** with `node:crypto` (no dependency, no ESM/Jest friction). It is the only option that is short, unguessable for unlisted videos, and guaranteed conflict-free by the DB `UNIQUE` constraint, which is the literal capability. Storage keys use the internal UUID (TD-02), so the public ID could be rotated without moving objects.
 
-**Decision:** A (11-char CSPRNG ID via `node:crypto` + `UNIQUE` + retry)
+**Decision:** _[pending]_
 
 ---
 
-## TD-14: Video Lifecycle State Model and Processing Failure Policy
+## TD-13: Video Lifecycle State Model and Processing Failure Policy
 
 **Scope:** Cross-layer
 
 **Capability:** Transversal — covers: Pré-cadastro automático do vídeo como rascunho ao iniciar o upload; Processamento automático do vídeo após upload (extração de duração e metadados)
 
-**Context:** The video row is created as a draft at `initiate` and moves through upload, processing, and success or failure. The DB enum, API, worker, BFF responses and FE UI all depend on the state names, so this is a cross-component contract. **Phase 04 owns "rascunho → publicação" (draft → publish) and visibility (public/unlisted).** If Phase 03 mixes processing states with publication states in one field, Phase 04 will have to migrate it. The failure policy (retries, terminal state) also belongs here, because TD-11's codec gate and FFmpeg errors must end somewhere visible.
+**Context:** The row is created as a draft at `initiate` and moves through upload, processing, and success or failure. The DB enum, the worker and the API responses depend on the state names. **API side of the contract:** the `status` values and `failureReason` exposed in payloads, which future clients will render. **Phase 04 owns "rascunho → publicação" and visibility.** If Phase 03 mixes processing states with publication states in one field, Phase 04 will have to migrate it. The failure policy belongs here too, because TD-10's codec gate and FFmpeg errors must end in a visible state.
 
 **Options:**
 
-### Option A: Processing-lifecycle `status` enum, separate from publication (Phase 04)
-- `status`: `uploading → processing → ready | failed`, plus `failure_reason`. The "draft" nature of a pre-registered video means "not yet published", which Phase 04 adds as its own field(s) (for example, `published_at` / `visibility`). Jobs use `attempts: 3` with exponential backoff and `jobId = videoId`. Non-retryable errors (unsupported codec) fail immediately. When retries run out, the status becomes `failed` with a reason.
-- **Pros:** Each field has one responsibility (technical pipeline vs. editorial state). Phase 04 adds publication without touching this enum. Clear terminal states for UI and tests. Idempotent reprocessing.
-- **Cons:** Two concepts to explain ("ready but unpublished"). The FE must combine both fields when rendering badges (Phase 04 panel).
+### Option A: Processing-lifecycle `status` enum, separate from publication
+- `status`: `uploading → processing → ready | failed`, plus `failure_reason`. In Phase 03, "draft" means "not yet published". Phase 04 adds that as its own field(s) (for example, `published_at`/`visibility`). Jobs use `attempts: 3` with exponential backoff and `jobId = videoId`. Non-retryable errors (unsupported codec) fail immediately (BullMQ `UnrecoverableError`). When retries run out, the status becomes `failed` with a reason.
+- **Pros:** One responsibility per field (technical pipeline vs. editorial state). Phase 04 extends without touching this enum. Clear terminal states for tests. Idempotent reprocessing.
+- **Cons:** Two concepts to explain ("ready but unpublished"). Consumers combine both fields later.
 
-### Option B: Single combined lifecycle enum (`draft → uploading → processing → ready → published`, `failed`)
-- One column covers both the pipeline and editorial state.
+### Option B: Single combined enum (`draft → uploading → processing → ready → published`, `failed`)
+- One column covers pipeline and editorial state.
 - **Pros:** One field to read.
-- **Cons:** Mixes two independent concerns. Re-processing or editing a published video does not fit a linear enum. Phase 04 would have to redesign it (migration and contract change). Breaks the single-responsibility principle in CLAUDE.md.
+- **Cons:** Mixes two independent concerns. Reprocessing or editing a published video does not fit a linear enum. Phase 04 would have to redesign it. Breaks the CLAUDE.md single-responsibility principle.
 
 ### Option C: Timestamp-derived state (`uploaded_at`, `processed_at`, `failed_at`)
 - No enum. The state is computed from which timestamps are set.
-- **Pros:** Keeps a history of when each step happened.
-- **Cons:** Derived state must be recomputed consistently in SQL, the API and the FE. Invalid combinations are possible. Harder to index and filter ("all processing videos").
+- **Pros:** Keeps a history of the steps.
+- **Cons:** The derived state must be recomputed the same way everywhere. Invalid combinations are possible. Harder to index and filter.
 
-**Recommendation:** **Option A.** It keeps the Phase 03 pipeline state separate from Phase 04's publication flow, so that phase extends the model instead of rewriting it. It also gives the worker's retry policy (BullMQ `attempts`/`backoff` + idempotent `jobId`, TD-07) a single, explicit terminal state. Default access rule to carry into planning: non-`ready` videos are visible only to their owner. Wider visibility rules are Phase 04.
+**Recommendation:** **Option A.** It keeps the Phase 03 pipeline separate from Phase 04's publication flow, so that phase extends the model instead of rewriting it. It also gives the worker's retry policy (TD-06) one explicit terminal state.
 
-**Decision:** A (processing-lifecycle `status` enum, separate from Phase 04 publication)
+**Decision:** _[pending]_
+
+---
+
+## TD-14: Access Policy for Streaming and Download by Video Status
+
+**Scope:** Cross-layer
+
+**Capability:** Transversal — covers: Reprodução via streaming (sem necessidade de download completo); Download do vídeo pelo usuário
+
+**Context:** Depends on TD-11 and TD-13. The signing endpoints need an access rule, and the global JWT guard (inherited) requires an explicit `@Public` for anonymous access. The project plan says anonymous users watch freely, but Phase 03 has no publication or visibility field yet (Phase 04), so **every Phase 03 video is effectively an unpublished draft**. **API side of the contract:** which callers get `200` vs. `401`/`403`/`404` on TD-11's endpoints. The anonymous viewing experience is Phase 05.
+
+**Options:**
+
+### Option A: `ready` → public (anonymous allowed); other statuses → owner only
+- The endpoints are `@Public` with optional auth. Non-owners get `404` unless `status = ready`.
+- **Pros:** Already matches the final product rule ("anonymous watch freely").
+- **Cons:** Exposes videos that Phase 04 will consider unpublished drafts. Phase 04 must then **tighten** the rule (ready + unpublished → owner only), which changes a live contract. Optional-auth handling adds guard work.
+
+### Option B: `ready` → any authenticated user; other statuses → owner only
+- The endpoints use the default JWT guard. Non-owners get `404` unless `status = ready`.
+- **Pros:** Simple with the existing guard. Lets a second user's e2e prove the "ready" rule.
+- **Cons:** Still exposes not-yet-published drafts to every logged-in user, so Phase 04 must also tighten it. A rule that no final phase keeps.
+
+### Option C: Owner only, any status
+- Only the channel owner can sign stream/download URLs. Other callers get `404` (the video's existence is not revealed).
+- **Pros:** Matches "pre-registered as draft" semantics and least privilege. Later phases only **widen** access (publication, visibility, anonymous in Phase 04/05), which is an additive change. No optional-auth plumbing now.
+- **Cons:** Phase 03 cannot demonstrate non-owner playback. The rule becomes dependent on Phase 04's publication field.
+
+**Recommendation:** **Option C.** In Phase 03 every video is a draft, so owner-only is the only rule that later phases extend instead of revoke. Note that the previous planning round (`validation.md` AMB-2, 2026-11-02) chose B as a temporary rule. Pick B again if you want a non-owner e2e scenario in this phase.
+
+**Decision:** _[pending]_
 
 ---
 
@@ -451,17 +465,17 @@ _Subprojects in scope:_
 
 | ID | Scope | Decision | Recommendation | Choice |
 |----|-------|----------|---------------|--------|
-| TD-01 | Backend | Object storage server and S3 client SDK | A — MinIO (pinned image) + `@aws-sdk/client-s3` v3 | A — MinIO (Chainguard image, digest-pinned) + AWS SDK v3 |
-| TD-02 | Cross-layer | Bucket topology and object access policy | B — private `videos` + public-read `thumbnails` | B |
-| TD-03 | Cross-layer | Client-facing storage endpoint for presigned URLs | A — `S3_ENDPOINT` (internal) + `S3_PUBLIC_ENDPOINT` (signing) | A |
-| TD-04 | Cross-layer | Large-file upload protocol (10GB, resumable) | A — S3 multipart, per-part presigned URLs, API-orchestrated | A |
-| TD-05 | Frontend | Browser upload client implementation | B — in-house uploader module | B |
-| TD-06 | Cross-layer | Upload limits, part size, abandoned-upload cleanup | A — server-dictated limits + cleanup job on the queue | A |
-| TD-07 | Backend | Background job queue | A — BullMQ + Redis (`@nestjs/bullmq`) | A |
-| TD-08 | Backend | Video worker deployment topology | A — separate container, same codebase, second entrypoint | A |
-| TD-09 | Backend | Processing trigger | A — API enqueues on `complete` | A |
-| TD-10 | Backend | Media inspection tooling and input access | A — direct ffprobe/ffmpeg CLI over presigned HTTP URL | A |
-| TD-11 | Cross-layer | Streaming format and browser playability | A — progressive original + ffprobe codec gate | A |
-| TD-12 | Cross-layer | Streaming and download delivery path | C — stable BFF URL → 302 to fresh presigned URL | C |
-| TD-13 | Cross-layer | Unique public video identifier (URL ID) | A — 11-char CSPRNG ID + `UNIQUE` + retry | A |
-| TD-14 | Cross-layer | Video lifecycle state model and failure policy | A — processing `status` enum, separate from publication | A |
+| TD-01 | Backend | Object storage server and S3 client SDK | A — MinIO (Chainguard, digest-pinned) + `@aws-sdk/client-s3` v3 | _[pending]_ |
+| TD-02 | Cross-layer | Bucket topology and object access policy | B — private `videos` + public-read `thumbnails` | _[pending]_ |
+| TD-03 | Cross-layer | Client-facing storage endpoint for presigned URLs | A — `S3_ENDPOINT` (internal) + `S3_PUBLIC_ENDPOINT` (signing) | _[pending]_ |
+| TD-04 | Cross-layer | Large-file upload protocol (10GB, resumable) | A — S3 multipart, per-part presigned URLs, API-orchestrated | _[pending]_ |
+| TD-05 | Cross-layer | Upload limits, part size, abandoned-upload cleanup | A — server-dictated limits + Job Scheduler cleanup | _[pending]_ |
+| TD-06 | Backend | Background job queue | A — BullMQ + Redis (`@nestjs/bullmq`) | _[pending]_ |
+| TD-07 | Backend | Video worker deployment topology | A — separate container, same codebase, second entrypoint | _[pending]_ |
+| TD-08 | Backend | Processing trigger | A — API enqueues on `complete` | _[pending]_ |
+| TD-09 | Backend | Media inspection tooling and input access | A — direct ffprobe/ffmpeg CLI over presigned HTTP URL | _[pending]_ |
+| TD-10 | Cross-layer | Streaming format and playability | A — progressive original + ffprobe codec gate | _[pending]_ |
+| TD-11 | Cross-layer | Streaming and download delivery endpoint contract | C — dedicated signing endpoints returning `{ url, expiresAt }` | _[pending]_ |
+| TD-12 | Cross-layer | Unique public video identifier (URL ID) | A — 11-char CSPRNG ID + `UNIQUE` + retry | _[pending]_ |
+| TD-13 | Cross-layer | Video lifecycle state model and failure policy | A — processing `status` enum, separate from publication | _[pending]_ |
+| TD-14 | Cross-layer | Access policy for streaming/download by status | C — owner only in Phase 03 | _[pending]_ |
