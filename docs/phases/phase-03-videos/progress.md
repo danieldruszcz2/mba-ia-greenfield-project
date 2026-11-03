@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 10/11 completed
+**SIs:** 11/11 completed
 
 ### SI-03.1 — Infra: object storage, Redis e contrato de env
 - **Status:** completed
@@ -100,6 +100,11 @@
   - No teste de integração, o vídeo `ready` é montado direto (objeto em `videos` + thumbnail + update de status), sem passar pelo worker. O fluxo completo com o worker fica no e2e da SI-03.11.
 
 ### SI-03.11 — Endpoints de detalhe, stream e download
-- **Status:** pending
-- **Tests:** 
-- **Observations:** 
+- **Status:** completed
+- **Tests:** 14 passing (6 e2e do spec `videos-delivery.plan.md` + 8 e2e de `videos-upload.plan.md` re-executados); tsc e eslint (0 warnings) limpos
+- **Observations:**
+  - O e2e de entrega sobe o `WorkerModule` no mesmo processo do Jest (`NestFactory.createApplicationContext`, prefixo `bull-test`). Assim o fluxo inteiro (upload → processamento real com ffmpeg → stream/download) roda com o `sample.mp4`. O cenário "processing → 409" pausa o worker (`worker.pause()`) antes do complete.
+  - Primeira execução: 1 de 14 falhou. O teste esperava o processamento fazendo polling em `GET /videos/:id` a cada 300 ms, estourou o throttler e recebeu `429`. Correção: a espera agora lê o status direto do banco.
+  - **Follow-up fora do escopo:** o `ThrottlerGuard` da fase 02 está registrado como `APP_GUARD` global (10 req/min por rota/IP) e se aplica a todas as rotas, inclusive `/videos`. O `phase-02-auth/TD-08` diz que ele ficaria restrito ao `AuthModule`. Um cliente real que faça polling no detalhe (ou player que renove a URL de stream) vai receber 429. Vale abrir uma task para escopar o throttler.
+  - No e2e de upload, o cenário 1.5 (abort) passou a verificar também `error: VIDEO_NOT_FOUND`, agora que a rota de detalhe existe.
+  - O `openapi.json` foi regenerado com as 8 rotas da fase. Os DTOs de resposta (`VideoDetailDto`, `VideoMetadataDto`, `SignedUrlDto`) têm `@ApiProperty`.

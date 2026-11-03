@@ -204,6 +204,7 @@ describe('videos-upload', () => {
       .get(`/videos/${id}`)
       .set(auth(ownerToken));
     expect(detail.status).toBe(404);
+    expect(body(detail).error).toBe('VIDEO_NOT_FOUND');
     expect(
       await dataSource.getRepository(Video).findOneBy({ public_id: id }),
     ).toBeNull();

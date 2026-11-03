@@ -31,6 +31,8 @@ import {
   PartUrlsResponseDto,
   UploadedPartsResponseDto,
 } from './dto/part-urls.dto';
+import { SignedUrlDto } from './dto/signed-url.dto';
+import { VideoDetailDto } from './dto/video-detail.dto';
 import { VideosService } from './videos.service';
 
 const errorSchema = { $ref: getSchemaPath(ApiErrorEnvelope) };
@@ -94,6 +96,73 @@ export class VideosController {
     @Body() dto: PartUrlsDto,
   ): Promise<PartUrlsResponseDto> {
     return this.videosService.getPartUrls(id, user.sub, dto.partNumbers);
+  }
+
+  @Get(':id')
+  @ApiOperation({
+    summary: 'Get a video',
+    description:
+      'Returns the video detail: processing status, duration, metadata and the public thumbnail URL. Only the owner can read it.',
+  })
+  @ApiResponse({ status: 200, type: VideoDetailDto })
+  @ApiResponse({
+    status: 404,
+    description: 'VIDEO_NOT_FOUND',
+    schema: errorSchema,
+  })
+  async getDetail(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ): Promise<VideoDetailDto> {
+    return this.videosService.getDetail(id, user.sub);
+  }
+
+  @Get(':id/stream')
+  @ApiOperation({
+    summary: 'Get a streaming URL',
+    description:
+      'Returns a short-lived presigned URL. Storage answers the player Range requests with 206 Partial Content, so the bytes never go through the API.',
+  })
+  @ApiResponse({ status: 200, type: SignedUrlDto })
+  @ApiResponse({
+    status: 404,
+    description: 'VIDEO_NOT_FOUND',
+    schema: errorSchema,
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'VIDEO_NOT_READY',
+    schema: errorSchema,
+  })
+  async getStreamUrl(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ): Promise<SignedUrlDto> {
+    return this.videosService.getStreamUrl(id, user.sub);
+  }
+
+  @Get(':id/download')
+  @ApiOperation({
+    summary: 'Get a download URL',
+    description:
+      'Same as the streaming URL, but storage serves the file with Content-Disposition: attachment and the original file name.',
+  })
+  @ApiResponse({ status: 200, type: SignedUrlDto })
+  @ApiResponse({
+    status: 404,
+    description: 'VIDEO_NOT_FOUND',
+    schema: errorSchema,
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'VIDEO_NOT_READY',
+    schema: errorSchema,
+  })
+  async getDownloadUrl(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ): Promise<SignedUrlDto> {
+    return this.videosService.getDownloadUrl(id, user.sub);
   }
 
   @Get(':id/upload/parts')
