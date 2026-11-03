@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 1/11 completed
+**SIs:** 2/11 completed
 
 ### SI-03.1 — Infra: object storage, Redis e contrato de env
 - **Status:** completed
@@ -13,9 +13,12 @@
   - Credenciais locais do MinIO em `.env`/`.env.example`: `S3_ACCESS_KEY=streamtube` e `S3_SECRET_KEY=streamtube-secret`. O Compose usa as mesmas como `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`.
 
 ### SI-03.2 — Criar StorageModule (clientes S3 interno e público)
-- **Status:** pending
-- **Tests:** 
-- **Observations:** 
+- **Status:** completed
+- **Tests:** 8 passing
+- **Observations:**
+  - Os dois `S3Client` são providers com tokens `Symbol` (`STORAGE_CLIENTS.INTERNAL` / `PUBLIC`), em vez de `new` dentro do service. Assim a DI e o teste conseguem acessar o cliente interno.
+  - No ambiente de testes, `S3_PUBLIC_ENDPOINT` e `S3_ENDPOINT` apontam para o mesmo host (`minio:9000`, via `test/setup-test-env.ts`). Por isso o AC "host público vs interno" só confirma que cada cliente usa a sua variável. A diferença real de host só aparece em dev.
+  - O download manda `Content-Disposition` com `filename="..."` (ASCII) e também `filename*=UTF-8''...`, para nomes com acento.
 
 ### SI-03.3 — Criar entidade Video, migration e gerador de public_id
 - **Status:** pending
