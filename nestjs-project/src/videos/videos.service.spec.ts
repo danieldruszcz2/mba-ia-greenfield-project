@@ -11,7 +11,7 @@ import {
   VideoTooLargeException,
   VideoUploadNotInProgressException,
 } from './videos.exceptions';
-import { VideosRepository } from './videos.repository';
+import { type NewVideo, VideosRepository } from './videos.repository';
 import { VideosService } from './videos.service';
 
 const USER_ID = 'user-1';
@@ -33,7 +33,10 @@ const buildVideo = (overrides: Partial<Video> = {}): Video =>
 describe('VideosService (upload)', () => {
   let service: VideosService;
   const repository = {
-    insertWithUniquePublicId: jest.fn(),
+    insertWithUniquePublicId: jest.fn<
+      Promise<Video>,
+      [NewVideo & { id?: string }]
+    >(),
     findOwnedByPublicId: jest.fn(),
     touch: jest.fn(),
     update: jest.fn(),
@@ -95,8 +98,8 @@ describe('VideosService (upload)', () => {
     it('should return the public id and the server-dictated part plan', async () => {
       channels.findByUserId.mockResolvedValue({ id: 'channel-1' });
       storage.createMultipartUpload.mockResolvedValue('upload-1');
-      repository.insertWithUniquePublicId.mockImplementation(async (data) =>
-        buildVideo({ ...data, public_id: 'pubId123456' }),
+      repository.insertWithUniquePublicId.mockImplementation((data) =>
+        Promise.resolve(buildVideo({ ...data, public_id: 'pubId123456' })),
       );
 
       const result = await service.initiateUpload(USER_ID, validInput);

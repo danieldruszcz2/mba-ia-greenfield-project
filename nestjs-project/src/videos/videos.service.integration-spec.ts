@@ -98,12 +98,10 @@ describe('VideosService upload lifecycle (integration: DB + MinIO + Redis)', () 
       sizeBytes: 1024 * 1024 * 1024,
     });
 
-    const video = await dataSource
-      .getRepository(Video)
-      .findOneOrFail({
-        where: { public_id: result.id },
-        relations: ['channel'],
-      });
+    const video = await dataSource.getRepository(Video).findOneOrFail({
+      where: { public_id: result.id },
+      relations: ['channel'],
+    });
     expect(result.partCount).toBe(16);
     expect(video.status).toBe(VideoStatus.UPLOADING);
     expect(video.upload_id).toBeTruthy();
