@@ -10,21 +10,32 @@ More info in the project overview: [docs/project-plan.md](docs/project-plan.md)
 
 This is a monorepo with two main areas:
 
-- `nestjs-project/` — Backend API (NestJS 11, TypeScript, Express). Contains modules for users, channels, videos, comments, etc.
+- `nestjs-project/` — Backend API (NestJS 11, TypeScript, Express). Contains modules for auth, users, channels, mail, storage, queue, videos and the video worker.
 - `docs/` — Project documentation, architecture diagrams, and planning.
-- `next-frontend/` (Next.js) — not yet initialized
+- `next-frontend/` — Frontend (Next.js). See `next-frontend/CLAUDE.md`.
 
 ## Architecture (C4 Container Diagram)
 
 See `docs/diagrams/software-arch.mermaid` for the full diagram. Key containers:
 
 - **Frontend** (Next.js) → calls API via REST, streams from Object Storage
-- **API** (Nest.js) → business rules, auth, reads/writes DB, uploads to storage, publishes jobs to queue, sends emails
+- **API** (Nest.js) → business rules, auth, reads/writes DB, signs storage URLs (multipart upload, stream, download), publishes jobs to queue, sends emails
 - **Video Worker** (FFmpeg) → consumes jobs from queue, processes videos, updates DB and storage
 - **Database** (PostgreSQL) → users, channels, videos, comments, likes
 - **Object Storage** (S3/MinIO) → video files and thumbnails
-- **Message Queue** (TBD) → video processing job queue
+- **Message Queue** (BullMQ on Redis) → video processing and maintenance job queues
 - **Email Service** (SMTP) → account confirmation and password recovery
+
+## Videos (Phase 03)
+
+Backend-only: upload, processing, streaming and download are exposed as NestJS endpoints; the video UI is deferred to Phase 04. Decisions in `docs/decisions/technical-decisions-phase-03-videos.md`, plan and progress in `docs/phases/phase-03-videos/`.
+
+- **Upload (up to 10 GiB):** S3 multipart with presigned part URLs. The API only handles small JSON (initiate / sign parts / complete / abort); the file bytes go straight from the client to Object Storage.
+- **Access (temporary):** every video route requires a JWT and is owner-only, whatever the status (TD-14). A non-owner gets `404`. Anonymous watching, from the product overview, comes in a later phase together with visibility.
+- **Status lifecycle:** `uploading` (draft) → `processing` → `ready` | `failed`, stored in the `videos` table, which belongs to a channel.
+- **Processing:** `complete` enqueues a job (`jobId = videoId`, 3 attempts, exponential backoff). The worker reads duration/metadata with ffprobe and extracts a thumbnail with ffmpeg, both over a presigned URL.
+- **Delivery:** stream and download return short-lived presigned URLs; storage answers `Range` requests with `206 Partial Content`, so video bytes never go through the API.
+- **Presigned URL host:** containers talk to storage via `S3_ENDPOINT` (Compose service name), but URLs handed to clients are signed with `S3_PUBLIC_ENDPOINT`. This is the one case where a client-facing host differs from the service name.
 
 ## Docker Networking
 

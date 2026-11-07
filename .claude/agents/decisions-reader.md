@@ -1,6 +1,6 @@
 ---
 name: decisions-reader
-description: Reads and filters technical decisions documents tied to a target phase or task. Returns a compact, structured index of all TDs (phase mode: phase-scope doc + ad-hoc docs with the phase in related_phases; task mode: the task's own ad-hoc doc if present) with their status, scope, topic, decision (if decided), and libraries (if any). Use when a stage of the plan pipeline needs the decisions landscape without loading the raw docs into the main thread.
+description: 'Reads and filters technical decisions documents tied to a target phase or task. Returns a compact, structured index of all TDs (phase mode: phase-scope doc + ad-hoc docs with the phase in related_phases; task mode: the task''s own ad-hoc doc if present) with their status, scope, topic, decision (if decided), and libraries (if any). Use when a stage of the plan pipeline needs the decisions landscape without loading the raw docs into the main thread.'
 tools: Read, Grep, Glob
 ---
 
