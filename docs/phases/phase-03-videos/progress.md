@@ -1,0 +1,149 @@
+# phase-03-videos — Progress
+
+**Status:** completed
+**SIs:** 11/11 completed
+
+### SI-03.1 — Infra: object storage, Redis e contrato de env
+- **Status:** completed
+- **Tests:** 15 passing
+- **Observations:**
+  - A imagem Chainguard do MinIO não tem shell, então não dá para ter healthcheck nela. O `minio-init` espera o MinIO com `mc ready` e o `nestjs-api` depende de `minio-init: service_completed_successfully`. Na prática, "MinIO pronto" equivale ao init terminar com exit code 0.
+  - O `minio-init` usa `cgr.dev/chainguard/minio-client:latest-dev`, pinado por digest, porque a variante sem `-dev` também não tem shell para rodar os vários comandos `mc`.
+  - O override de `S3_PUBLIC_ENDPOINT` nos testes fica em `test/setup-test-env.ts`, ligado no `setupFiles` dos dois configs do Jest. Ele usa `S3_ENDPOINT` (`http://minio:9000`), a não ser que `S3_TEST_PUBLIC_ENDPOINT` esteja definido.
+  - Credenciais locais do MinIO em `.env`/`.env.example`: `S3_ACCESS_KEY=streamtube` e `S3_SECRET_KEY=streamtube-secret`. O Compose usa as mesmas como `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`.
+
+### SI-03.2 — Criar StorageModule (clientes S3 interno e público)
+- **Status:** completed
+- **Tests:** 8 passing
+- **Observations:**
+  - Os dois `S3Client` são providers com tokens `Symbol` (`STORAGE_CLIENTS.INTERNAL` / `PUBLIC`), em vez de `new` dentro do service. Assim a DI e o teste conseguem acessar o cliente interno.
+  - No ambiente de testes, `S3_PUBLIC_ENDPOINT` e `S3_ENDPOINT` apontam para o mesmo host (`minio:9000`, via `test/setup-test-env.ts`). Por isso o AC "host público vs interno" só confirma que cada cliente usa a sua variável. A diferença real de host só aparece em dev.
+  - O download manda `Content-Disposition` com `filename="..."` (ASCII) e também `filename*=UTF-8''...`, para nomes com acento.
+
+### SI-03.3 — Criar entidade Video, migration e gerador de public_id
+- **Status:** completed
+- **Tests:** 75 passing (3 suítes novas + 11 suítes existentes afetadas, 2 rodadas seguidas sem flakiness)
+- **Observations:**
+  - A regra de entidades pede os dois lados da relação, então entrou `Channel.videos` (`@OneToMany`). Por isso `Video` foi adicionado aos `ALL_ENTITIES` das 10 suítes que carregam `Channel`. Sem ele, o TypeORM falha na metadata.
+  - O `VideosModule` foi criado já nesta SI, só com `forFeature([Video])` + `VideosRepository` e registrado no `AppModule`, para o app continuar subindo (o `Channel` referencia `Video`). A SI-03.6 completa o módulo.
+  - `migrations.integration-spec.ts`: entrou `CreateVideos`. Os `DROP TABLE` do setup passaram a ser sequenciais, porque em paralelo davam deadlock com a FK `videos → channels`. O setup também passou a dropar os enums `verification_tokens_type_enum` e `video_status`, que sobram das suítes com `synchronize: true`.
+  - Na época desta SI, o banco local de dev não tinha nenhuma linha na tabela `migrations` (o schema veio do `synchronize` dos testes) e o `npm run migration:run` falhava com "relation already exists". **Atualização pós-fase:** o `migrations.integration-spec.ts` da verificação final deixou o banco migrado, e hoje as 3 migrations estão registradas e o `migration:run` responde "No migrations are pending". A causa de fundo continua: dev e testes usam o mesmo banco `streamtube`, e as suítes com `synchronize: true` podem divergir do schema das migrations e apagar dados de dev. Sugestão de task: banco separado para testes.
+  - `size_bytes` (bigint) e `duration_seconds` (numeric) usam um transformer para voltar como `number`, porque o `pg` devolve esses tipos como string.
+  - Rodar o prettier por diretório reescreveu arquivos não tocados só no line ending (`core.autocrlf=true`), sem diff de conteúdo. A partir daqui, o prettier roda só nos arquivos editados.
+
+### SI-03.4 — Configurar fila BullMQ e producer de processamento
+- **Status:** completed
+- **Tests:** 5 passing (+ 7 e2e de smoke do AppModule passando, sem open handles)
+- **Observations:**
+  - No BullMQ v6, `ioredis` virou peer dependency opcional e precisa ser instalado explicitamente. Sem ele o `new Queue` quebra com "could not load the optional 'ioredis' package". Foi instalado `ioredis@^5.11.1`. Essa mudança não aparecia na doc da v6 consultada no Context7.
+  - O `QueueModule` exporta `BullModule` (as filas) e `VideoProcessingProducer`, para o worker da SI-03.7 reaproveitar as mesmas filas.
+  - O `AppModule` agora depende do Redis para subir, então as suítes e2e precisam do `redis` do Compose rodando.
+
+### SI-03.5 — Implementar ciclo de upload no VideosService
+- **Status:** completed
+- **Tests:** 21 passing (+ e2e de smoke do AppModule passando)
+- **Observations:**
+  - O canal do usuário vem de um novo `ChannelsService.findByUserId`, para o `VideosService` não ler a entidade de outro domínio direto. O `VideosModule` importa `ChannelsModule`.
+  - O `id` (uuid) do vídeo é gerado na aplicação antes do insert, porque a `storage_key` (`{id}/original`) é necessária para abrir o multipart. Se o insert falhar, o multipart é abortado (compensação).
+  - Um `partNumbers` fora de `1..partCount` lança `INVALID_UPLOAD_PARTS` (400), reaproveitando o código do catálogo. O contrato fala genericamente em "400 validation error" para esse caso.
+  - A lista de nomes de erro do S3 mapeados para `INVALID_UPLOAD_PARTS` inclui `EntityTooSmall`, além de `InvalidPart`/`InvalidPartOrder`. Ele aparece quando uma parte intermediária tem menos de 5 MiB.
+  - Aparece o aviso de deprecação do pg "client.query() when the client is already executing a query" nas suítes de integração. Ele já existia antes e vem do TypeORM/pg, sem falha associada.
+
+### SI-03.6 — Endpoints de upload (VideosController)
+- **Status:** completed
+- **Tests:** 9 passing (1 de compilação do módulo + 8 e2e do spec `videos-upload.plan.md`)
+- **Observations:**
+  - Os DTOs de request seguem `.claude/rules/nestjs-dtos.md`: só `class-validator` + JSDoc, sem `@ApiProperty`. Os DTOs de resposta têm `@ApiProperty`. Como o `openapi:export` roda com ts-node (sem o plugin do Swagger), os schemas de request saem sem propriedades no `openapi.json`, o mesmo comportamento dos DTOs de auth que já existiam.
+  - `sizeBytes` e `contentType` não têm limite/allowlist no DTO, de propósito. Assim os erros de domínio `VIDEO_TOO_LARGE` e `UNSUPPORTED_VIDEO_TYPE` (do contrato) aparecem, em vez de um 400 genérico de validação.
+  - O cenário 1.5 (`abort-upload-removes-draft`) verifica o `GET /videos/:id` → `404` só pelo status. A rota de detalhe só existe na SI-03.11, então por enquanto o 404 é de rota inexistente. A SI-03.11 cobre o `VIDEO_NOT_FOUND` no detalhe.
+  - Os helpers de e2e (`test/helpers/videos-e2e.helpers.ts`: app com pipes/filters do `main.ts`, registro+confirmação+login, PUT direto no storage) ficam compartilhados com o e2e da SI-03.11.
+  - O `openapi.json` foi regenerado com as 5 rotas de upload.
+
+### SI-03.7 — Infra: entrypoint e container do video worker
+- **Status:** completed
+- **Tests:** 22 passing (worker.module + suítes afetadas pelo refactor) + 9 e2e (upload + app) com cache frio do Jest; tsc e eslint limpos
+- **Observations:**
+  - A config do `ConfigModule` e a do TypeORM foram extraídas para `src/config/config-module.options.ts` e `src/database/typeorm-options.factory.ts`, usadas pelo `AppModule` e pelo `WorkerModule`. Assim a mesma config não fica duplicada nos dois.
+  - O `WorkerModule` importa `UsersModule` só para a metadata da entidade `User`, já que o `Video` chega nela pelo `Channel`. O `VideosModule` passou a exportar o `VideosRepository` para os processors das SI-03.8/03.9.
+  - Novo `QUEUE_PREFIX` (default `bull`), e os testes usam `bull-test` via `test/setup-test-env.ts`. Sem isso, o container `video-worker` consumiria os jobs criados pelos testes assim que o processor existir.
+  - No compose, o worker roda `node --watch-path=src` + ts-node direto, sem `npm run`. Pelo npm, o container saía com exit 1 no SIGTERM. Também ganhou `TS_NODE_TRANSPILE_ONLY=true`: o boot caiu de ~90 s para ~35 s (o type-check continua com `tsc --noEmit`). O shutdown leva ~2 s e sai com exit 0.
+  - O primeiro e2e depois do rebuild da imagem falhou com o cache frio do ts-jest. O `beforeAll` passou dos 5 s e a conexão Redis deu `ETIMEDOUT`. Como o `afterAll` quebrava antes do `app.close()`, o Jest ficou preso nos open handles. Correção: `E2E_SETUP_TIMEOUT_MS = 60s` nos hooks e teardown protegido. Validado com `jest --clearCache`.
+  - Ambiente: o disco `C:` encheu durante o rebuild e o Docker Desktop travou com erro de I/O. O usuário migrou o disco do Docker para outro HD. O CLI do Docker agora fica em `AppData/Local/Programs/DockerDesktop/resources/bin`, que não está no PATH deste shell.
+  - O prettier converteu as aspas do `compose.yaml` inteiro. A mudança foi revertida e só o bloco `video-worker` foi reaplicado, para não misturar mudança cosmética com a funcional.
+
+### SI-03.8 — Implementar VideoProcessor (metadados, thumbnail e status)
+- **Status:** completed
+- **Tests:** 24 passing (unit do codec gate + integração com ffprobe/ffmpeg reais + processor com DB/MinIO/Redis); tsc e eslint limpos
+- **Observations:**
+  - As fixtures `test/fixtures/sample.mp4` (h264/aac, 5 s, 72 KB) e `unplayable.avi` (mpeg4, 33 KB) foram geradas com o ffmpeg do container (`testsrc` + `sine`).
+  - O handler de falha usa `@OnWorkerEvent('failed')` do `@nestjs/bullmq`, equivalente ao `worker.on('failed')` em `onApplicationBootstrap` que o plano cita. Ele só marca `failed` na última tentativa (`attemptsMade >= attempts`) ou quando o erro é `UnrecoverableError` (codec). Nas tentativas intermediárias, não faz nada.
+  - O container vem do `format_name` do ffprobe (`mov,mp4,...` → `mp4`, `matroska,webm` → `webm`). Áudio ausente é aceito pelo gate.
+  - Um vídeo apagado entre o enqueue e o processamento (ex.: abort) gera só um warning, e o job termina sem erro.
+  - O critério de aceite "lê por HTTP Range, sem baixar o arquivo inteiro" não tem teste próprio. Ele vem da forma de entrada: o ffprobe/ffmpeg recebe a URL assinada, sem cópia local.
+  - `VideosRepository.findById` foi adicionado para o worker.
+
+### SI-03.9 — Limpeza agendada de uploads abandonados
+- **Status:** completed
+- **Tests:** 13 passing (7 da limpeza + 6 das suítes do worker afetadas pelo novo registro); tsc e eslint limpos
+- **Observations:**
+  - O `upsertJobScheduler` está num provider separado, `UploadCleanupScheduler` (`OnApplicationBootstrap`), e não dentro do processor. Assim ele roda só no worker e o teste consegue chamá-lo direto.
+  - O teste da limpeza usa `compile()` sem `init()`: os workers do BullMQ ficam parados e o teste chama `process()` e o scheduler direto. Isso evita corrida com o job que o scheduler dispara no boot.
+  - Para envelhecer a linha, o `updated_at` é ajustado com SQL cru (`now() - make_interval(...)`), porque o `@UpdateDateColumn` sobrescreveria o valor em qualquer `save`/`update`.
+  - Se um abort falhar no meio, o erro propaga: o job falha e o lote é refeito na próxima hora. Como o abort é idempotente, refazer é seguro.
+
+### SI-03.10 — Implementar leitura e entrega no VideosService
+- **Status:** completed
+- **Tests:** 34 passing (suítes unit + integration do `VideosService`, com os casos novos de leitura e entrega); tsc e eslint limpos
+- **Observations:**
+  - Stream e download exigem `status = ready` e lançam `VIDEO_NOT_READY` (409) nos outros status, incluindo `failed`. O TD-14 trata de quem pode acessar (só o dono, em qualquer status). Quando a URL pode ser gerada é uma regra à parte, porque antes do `ready` não existe um objeto tocável.
+  - O detalhe devolve `thumbnailUrl` pela URL pública estável do bucket `thumbnails`, sem assinatura. `durationSeconds`, `metadata` e `thumbnailUrl` vêm `null` até o worker terminar.
+  - No teste de integração, o vídeo `ready` é montado direto (objeto em `videos` + thumbnail + update de status), sem passar pelo worker. O fluxo completo com o worker fica no e2e da SI-03.11.
+
+### SI-03.11 — Endpoints de detalhe, stream e download
+- **Status:** completed
+- **Tests:** 14 passing (6 e2e do spec `videos-delivery.plan.md` + 8 e2e de `videos-upload.plan.md` re-executados); tsc e eslint (0 warnings) limpos
+- **Observations:**
+  - O e2e de entrega sobe o `WorkerModule` no mesmo processo do Jest (`NestFactory.createApplicationContext`, prefixo `bull-test`). Assim o fluxo inteiro (upload → processamento real com ffmpeg → stream/download) roda com o `sample.mp4`. O cenário "processing → 409" pausa o worker (`worker.pause()`) antes do complete.
+  - Primeira execução: 1 de 14 falhou. O teste esperava o processamento fazendo polling em `GET /videos/:id` a cada 300 ms, estourou o throttler e recebeu `429`. Correção: a espera agora lê o status direto do banco.
+  - **Follow-up fora do escopo:** o `ThrottlerGuard` da fase 02 está registrado como `APP_GUARD` global (10 req/min por rota/IP) e se aplica a todas as rotas, inclusive `/videos`. O `phase-02-auth/TD-08` diz que ele ficaria restrito ao `AuthModule`. Um cliente real que faça polling no detalhe (ou player que renove a URL de stream) vai receber 429. Vale abrir uma task para escopar o throttler.
+  - No e2e de upload, o cenário 1.5 (abort) passou a verificar também `error: VIDEO_NOT_FOUND`, agora que a rota de detalhe existe.
+  - O `openapi.json` foi regenerado com as 8 rotas da fase. Os DTOs de resposta (`VideoDetailDto`, `VideoMetadataDto`, `SignedUrlDto`) têm `@ApiProperty`.
+
+## Final verification
+
+- **Unit + integration** (`npm test -- --runInBand`): 38/38 suites, 244/244 testes, ~318 s.
+- **E2E** (`npm run test:e2e`): 5/5 suites, 66/66 testes, ~141 s. Na primeira execução, 57 de 66 falharam porque as suítes rodaram em paralelo contra o mesmo banco: o script `test:e2e` nunca teve `--runInBand`, embora o `nestjs-project/CLAUDE.md` diga que já tinha. O problema é anterior à fase e apareceu com as duas suítes novas de vídeo. Correção: `--runInBand` adicionado ao script.
+- **Type-check** (`npx tsc --noEmit`): OK.
+- **Lint** (`npx eslint "{src,apps,libs,test}/**/*.ts" --max-warnings 0`, sem `--fix`): OK.
+- **Build** (`npm run build`): OK.
+
+## Smoke manual — upload de arquivo grande
+
+### Rodada 1 — 4,35 GiB
+
+Executado em 2026-11-03, fora da suíte, conforme o roteiro da fase ("não subir 10GB na suíte; smoke manual com alguns GB").
+
+- **Arquivo:** vídeo real gerado com ffmpeg dentro do container (`testsrc2` 1080p + ruído por frame, h264 lossless + aac, 40 s). Tamanho: **4.675.755.417 bytes (4,35 GiB)**. O ruído impede compressão, então o arquivo fica grande de verdade e continua tocável.
+- **Como rodou:** script Node no container `nestjs-api`, com a API subida in-process a partir do `dist/` (como no e2e, sem servidor de dev). Usuário dedicado, criado e removido no fim. O processamento ficou com o container `video-worker` real.
+- **Upload:** 70 partes de 64 MiB, 4 em paralelo, direto no MinIO por URL assinada. Levou **67,2 s (~66 MiB/s)**.
+  - Bytes enviados à API: **4.937** (só JSON). Bytes enviados ao storage: **4.675.755.417**. O arquivo não passou pela API.
+  - `GET /upload/parts` antes do complete listou as 70 partes, e o `complete` respondeu `202`.
+  - O RSS do processo do script chegou a 1,29 GiB, mas por causa dos buffers de 64 MiB do próprio script (4 partes em memória ao mesmo tempo, no mesmo processo da API in-process). Não é consumo da API, que só recebeu os 4.937 bytes.
+- **Processamento:** `ready` em **8 s**: ffprobe/ffmpeg leram por HTTP Range, sem baixar os 4,35 GiB. Metadados: 1920×1080, h264/aac, mp4, duração 40 s, bitrate ~935 Mbps. Thumbnail pública respondeu `200`.
+- **Stream:** `Range: bytes=0-1023` → `206` (`bytes 0-1023/4675755417`). Último 1 MiB → `206` (`bytes 4674706841-4675755416/4675755417`).
+- **Download:** `206` em `Range: bytes=0-0`, com `Content-Disposition: attachment; filename="smoke-large.mp4"`.
+- **Limpeza:** objeto original, thumbnail, linha do vídeo e usuário removidos. O arquivo de 4,7 GB e o script foram apagados do `/tmp` do container.
+
+### Rodada 2 — 10,52 GB (9,80 GiB), no limite do requisito "até 10GB"
+
+Feita logo depois da primeira, com o mesmo script, para provar o tamanho do requisito (o limite aceito pela API é 10 GiB = 10.737.418.240 bytes).
+
+- **Arquivo:** vídeo real gerado igual ao da rodada 1, com 90 s. Tamanho: **10.520.564.693 bytes (10,52 GB / 9,80 GiB)**, 98% do limite.
+- **Upload:** **157 partes** de 64 MiB, 4 em paralelo, direto ao MinIO, em **260,5 s (~38,5 MiB/s)**.
+  - Bytes enviados à API: **10.900** (só JSON: init, 2 lotes de part-urls, list, complete). Bytes enviados ao storage: **10.520.564.693**.
+  - `GET /upload/parts` listou as 157 partes, e o `complete` respondeu `202`.
+  - O RSS do script teve o mesmo pico da rodada 1 (**1,29 GiB**) com mais que o dobro do tamanho. A memória depende da concorrência (4 × 64 MiB), não do tamanho do arquivo.
+- **Processamento:** `ready` em **10 s** (8 s na rodada 1). A leitura por Range torna o tempo praticamente independente do tamanho. Metadados: 1920×1080, h264/aac, mp4, 90 s. Thumbnail `200`.
+- **Stream:** `206` em `bytes 0-1023/10520564693` e no último MiB (`bytes 10519516117-10520564692/10520564693`).
+- **Download:** `206` com `Content-Disposition: attachment; filename="smoke-10g.mp4"`.
+- **Limpeza:** objeto, thumbnail, linha e usuário removidos. O arquivo de 10,5 GB e o script foram apagados do `/tmp` do container. O bucket `videos` voltou aos 38 MiB das fixtures de teste.

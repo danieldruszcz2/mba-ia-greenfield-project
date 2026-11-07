@@ -1,6 +1,6 @@
 ---
 name: decisions-correlator
-description: Given a scope prose + mode, globs docs/decisions/*.md, reads only the frontmatter of each candidate, applies a per-mode candidate-pool filter, and returns a ranked shortlist of decisions docs semantically correlated with the scope. Used by plan-context in both phase mode (pool = ad-hoc docs with `related_phases: []`) and task mode (pool = all docs except the task's own) to surface potentially relevant prior decisions without loading their bodies. The main thread asks the user to confirm the final set via AskUserQuestion.
+description: 'Given a scope prose + mode, globs docs/decisions/*.md, reads only the frontmatter of each candidate, applies a per-mode candidate-pool filter, and returns a ranked shortlist of decisions docs semantically correlated with the scope. Used by plan-context in both phase mode (pool = ad-hoc docs with `related_phases: []`) and task mode (pool = all docs except the task''s own) to surface potentially relevant prior decisions without loading their bodies. The main thread asks the user to confirm the final set via AskUserQuestion.'
 tools: Read, Grep, Glob
 ---
 
